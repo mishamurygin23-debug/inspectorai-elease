@@ -334,6 +334,73 @@ export const App: React.FC = () => {
     );
   };
 
+  // 6b. Toggle object verified and sent status (for Dashboard highlight)
+  const handleToggleVerifiedAndSent = (objectId: string) => {
+    setObjects((prev) =>
+      prev.map((obj) => {
+        if (obj.id === objectId) {
+          const nextState = !obj.is_verified_and_sent;
+          const reportCode = nextState
+            ? `ОПР-2026/${obj.id.replace('obj-', '').toUpperCase()}-МГСН`
+            : undefined;
+          return {
+            ...obj,
+            is_verified_and_sent: nextState,
+            verified_and_sent_at: nextState ? new Date().toISOString() : undefined,
+            sent_report_id: reportCode,
+          };
+        }
+        return obj;
+      })
+    );
+  };
+
+  // 6c. Complete full verification, transmit report to IAIS "RiN", and highlight object on Dashboard
+  const handleSendReportAndHighlightObject = (objectId?: string) => {
+    const targetId = objectId || currentObject.id;
+    const targetObj = objects.find((o) => o.id === targetId) || currentObject;
+    const reportCode = `ОПР-2026/${targetObj.id.replace('obj-', '').toUpperCase()}-МГСН`;
+
+    setObjects((prev) =>
+      prev.map((obj) => {
+        if (obj.id === targetId) {
+          return {
+            ...obj,
+            is_verified_and_sent: true,
+            verified_and_sent_at: new Date().toISOString(),
+            sent_report_id: reportCode,
+            status: 'GREEN',
+            iais_rin_sync: {
+              ...obj.iais_rin_sync,
+              status: 'SYNCED',
+              registration_number: `РИН-${Date.now().toString().slice(-6)}/26`,
+              ukep_signature: {
+                ...obj.iais_rin_sync.ukep_signature,
+                valid: true,
+                signed_at: new Date().toISOString(),
+              },
+            },
+          };
+        }
+        return obj;
+      })
+    );
+
+    setProtocol((prev) => ({
+      ...prev,
+      status: 'FINALIZED',
+      iais_sync_status: 'SYNCED',
+      ukep_signature: `UKEP-SIG-2026-MOSGOS-${Date.now().toString(16).toUpperCase()}`,
+      signed_at: new Date().toISOString(),
+      signed_by: currentRole === 'SUPERVISOR' ? 'Смирнов В.П. (Супервизор)' : 'Иванов А.С. (Инспектор)',
+    }));
+
+    addAuditEntry(
+      'REPORT_SENT_IAIS_RIN',
+      `Полная проверка завершена: отчет по объекту «${targetObj.name}» (№ ${reportCode}) отправлен в надзорную систему ИАИС «РиН». Объект отмечен на Дашборде как полностью проверенный.`
+    );
+  };
+
   // 7. Step 2 & 3: Upload success and automatic verification
   const handleUploadSuccess = (filesCount: number) => {
     setObjects((prev) =>
@@ -606,10 +673,11 @@ export const App: React.FC = () => {
               setIsIncrementalUpload(false);
               setIsUploadOpen(true);
             }}
+            onToggleVerifiedAndSent={handleToggleVerifiedAndSent}
           />
         )}
 
-        {activeTab === 'inspection' && (
+        {(activeTab === 'inspection' || activeTab === 'hypotheses') && (
           <InspectionWorkspace
             currentObject={currentObject}
             protocol={protocol}
@@ -622,24 +690,18 @@ export const App: React.FC = () => {
             suspicions={suspicions}
             onPromoteToCandidate={handlePromoteToCandidate}
             onAddNewHypothesis={handleAddNewHypothesis}
+            onDismissSuspicion={handleDismissSuspicion}
             onOpenUpload={() => {
               setIsIncrementalUpload(false);
               setIsUploadOpen(true);
             }}
             onOpenExport={() => setIsExportOpen(true)}
+            onSendReportAndComplete={handleSendReportAndHighlightObject}
+            onNavigateToDashboard={() => setActiveTab('dashboard')}
           />
         )}
 
         {activeTab === 'matrix' && <Matrix132Tab />}
-
-        {activeTab === 'hypotheses' && (
-          <HypothesisTab
-            suspicions={suspicions}
-            onPromoteToCandidate={handlePromoteToCandidate}
-            onDismissSuspicion={handleDismissSuspicion}
-            onAddNewHypothesis={handleAddNewHypothesis}
-          />
-        )}
 
         {activeTab === 'iais_rin' && (
           <IaisRinTab

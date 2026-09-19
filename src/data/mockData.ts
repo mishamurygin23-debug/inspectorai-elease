@@ -122,6 +122,9 @@ export const INITIAL_OBJECTS: ConstructionObject[] = [
       },
       status: 'SYNCED',
     },
+    is_verified_and_sent: true,
+    verified_and_sent_at: '2026-07-10T11:45:00Z',
+    sent_report_id: 'ОПР-2026/07-003-МГСН',
   },
 ];
 

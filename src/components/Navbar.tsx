@@ -56,7 +56,6 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'dashboard', label: 'Дашборд объектов', icon: Building2 },
     { id: 'inspection', label: 'Верификация протокола (Чертеж с ошибками)', icon: FileCheck2, badge: 'Красный PDF' },
     { id: 'matrix', label: 'Матрица 132 параметров', icon: Layers },
-    { id: 'hypotheses', label: 'Свободный поиск гипотез', icon: ShieldAlert },
     { id: 'iais_rin', label: 'ИАИС «РиН» (Интеграция)', icon: Share2 },
     { id: 'ml_repo', label: 'Репозиторий нейросети v2.4', icon: FolderGit2 },
     { id: 'ml_gold', label: 'ML Дообучение & GOLD', icon: Cpu },

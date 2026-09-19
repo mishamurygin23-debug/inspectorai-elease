@@ -30,6 +30,7 @@ interface DashboardProps {
   onOpenUpload: () => void;
   onOpenCreateObject: () => void;
   onOpenUploadForObject: (obj: ConstructionObject) => void;
+  onToggleVerifiedAndSent?: (objectId: string) => void;
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({
@@ -41,14 +42,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onOpenUpload,
   onOpenCreateObject,
   onOpenUploadForObject,
+  onToggleVerifiedAndSent,
 }) => {
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [filterScenario, setFilterScenario] = useState<string>('ALL');
+  const [filterVerifiedStatus, setFilterVerifiedStatus] = useState<'ALL' | 'VERIFIED' | 'PENDING'>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
+
+  const verifiedCount = objects.filter((o) => o.is_verified_and_sent).length;
+  const pendingCount = objects.length - verifiedCount;
 
   const filteredObjects = objects.filter((obj) => {
     if (filterStatus !== 'ALL' && obj.status !== filterStatus) return false;
     if (filterScenario !== 'ALL' && obj.scenarios.upload_scenario !== filterScenario) return false;
+    if (filterVerifiedStatus === 'VERIFIED' && !obj.is_verified_and_sent) return false;
+    if (filterVerifiedStatus === 'PENDING' && obj.is_verified_and_sent) return false;
     if (
       searchQuery &&
       !obj.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
@@ -198,6 +206,41 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
+          {/* Quick Filter: All vs Verified & Sent vs In Progress */}
+          <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-bold">
+            <button
+              onClick={() => setFilterVerifiedStatus('ALL')}
+              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                filterVerifiedStatus === 'ALL'
+                  ? 'bg-purple-800 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Все объекты ({objects.length})
+            </button>
+            <button
+              onClick={() => setFilterVerifiedStatus('VERIFIED')}
+              className={`px-3 py-1.5 rounded-lg transition-all flex items-center space-x-1.5 cursor-pointer ${
+                filterVerifiedStatus === 'VERIFIED'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'text-emerald-800 hover:bg-emerald-50'
+              }`}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>Отчет отправлен ({verifiedCount})</span>
+            </button>
+            <button
+              onClick={() => setFilterVerifiedStatus('PENDING')}
+              className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                filterVerifiedStatus === 'PENDING'
+                  ? 'bg-amber-600 text-white shadow-xs'
+                  : 'text-amber-800 hover:bg-amber-50'
+              }`}
+            >
+              В процессе сверки ({pendingCount})
+            </button>
+          </div>
+
           <div className="flex items-center space-x-1.5 text-xs text-slate-600">
             <Filter className="w-3.5 h-3.5 text-slate-400" />
             <span className="font-medium">Статус:</span>
@@ -241,19 +284,49 @@ export const Dashboard: React.FC<DashboardProps> = ({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         {filteredObjects.map((obj) => {
           const isSelected = obj.id === selectedObjectId;
+          const isVerifiedAndSent = !!obj.is_verified_and_sent;
+
           return (
             <div
               key={obj.id}
-              className={`bg-white rounded-2xl p-5 shadow-sm border transition-all duration-200 flex flex-col justify-between ${
+              className={`rounded-2xl p-5 transition-all duration-200 flex flex-col justify-between relative ${
                 isSelected
-                  ? 'border-purple-600 ring-2 ring-purple-600/20 shadow-md'
-                  : 'border-slate-200 hover:border-slate-300 hover:shadow-md'
+                  ? 'border-2 border-purple-600 ring-2 ring-purple-600/20 shadow-lg bg-white'
+                  : isVerifiedAndSent
+                  ? 'border-2 border-emerald-500 ring-4 ring-emerald-500/25 bg-gradient-to-b from-emerald-50/50 via-white to-white shadow-xl'
+                  : 'bg-white border border-slate-200 hover:border-slate-300 hover:shadow-md'
               }`}
             >
+              {/* TOP HIGHLIGHT BANNER: EXPLICITLY HIGHLIGHTING FULLY VERIFIED OBJECTS WITH SENT REPORTS */}
+              {isVerifiedAndSent && (
+                <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 text-white px-4 py-2.5 rounded-t-2xl -mt-5 -mx-5 mb-4 flex flex-wrap items-center justify-between gap-2 shadow-md border-b border-emerald-400/40">
+                  <div className="flex items-center space-x-2">
+                    <span className="relative flex h-3 w-3">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-80"></span>
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-white"></span>
+                    </span>
+                    <span className="text-xs font-black tracking-wide uppercase flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 text-white" />
+                      ПРОВЕРКА ЗАВЕРШЕНА • ОТЧЕТ ОТПРАВЛЕН В ИАИС «РиН»
+                    </span>
+                  </div>
+                  <span className="text-[11px] font-mono font-black bg-black/25 px-2.5 py-0.5 rounded text-emerald-100 border border-emerald-300/40">
+                    {obj.sent_report_id || 'ОПР-2026/07-МГСН'}
+                  </span>
+                </div>
+              )}
+
               <div>
                 {/* Header with status badge & scenario */}
                 <div className="flex items-start justify-between gap-2 mb-3">
-                  {getStatusBadge(obj.status)}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {getStatusBadge(obj.status)}
+                    {isVerifiedAndSent && (
+                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-600 text-white shadow-xs">
+                        ✓ Отчет передан
+                      </span>
+                    )}
+                  </div>
                   {getScenarioBadge(obj.scenarios.upload_scenario)}
                 </div>
 
@@ -264,6 +337,30 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   <Building2 className="w-3.5 h-3.5 text-slate-400 mr-1.5 shrink-0" />
                   <span>{obj.address}</span>
                 </p>
+
+                {/* HIGHLIGHTED REPORT SUBMISSION CALLOUT */}
+                {isVerifiedAndSent && (
+                  <div className="mt-3.5 p-3 rounded-xl bg-emerald-50/90 border border-emerald-300 text-emerald-950 text-xs flex flex-wrap items-center justify-between gap-2 shadow-xs">
+                    <div className="flex items-center space-x-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                        <ShieldCheck className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="font-extrabold text-slate-900 text-xs">
+                          Полная проверка завершена • Документы приняты в надзорный контур
+                        </div>
+                        <div className="text-[11px] text-emerald-800">
+                          {obj.verified_and_sent_at
+                            ? `Передано: ${new Date(obj.verified_and_sent_at).toLocaleDateString('ru-RU')} в ${new Date(obj.verified_and_sent_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} • Подписано с УКЭП`
+                            : 'Зафиксировано в ИАИС «РиН» • Подписано с УКЭП'}
+                        </div>
+                      </div>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider bg-emerald-700 text-white shadow-xs">
+                      ✓ ПРИНЯТО В РИН
+                    </span>
+                  </div>
+                )}
 
                 {/* Sub details: Customer, contractor, permit */}
                 <div className="mt-3.5 pt-3 border-t border-slate-100 grid grid-cols-2 gap-2 text-xs">
@@ -347,20 +444,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </div>
               </div>
 
-              {/* Action Buttons with explicit 3-step workflow support */}
+              {/* Action Buttons with explicit workflow support */}
               <div className="mt-5 pt-3 border-t border-slate-100 space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  {/* Step 2: Upload documents into this specific object */}
+                  {/* Upload documents into this specific object */}
                   <button
                     onClick={() => onOpenUploadForObject(obj)}
                     className="px-3 py-1.5 text-xs font-bold text-purple-800 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-lg flex items-center space-x-1.5 transition-colors cursor-pointer"
                     title={`Загрузить чертежи и документы в объект «${obj.name}»`}
                   >
                     <UploadCloud className="w-3.5 h-3.5 text-purple-700" />
-                    <span>Загрузить файлы в объект</span>
+                    <span>Загрузить файлы</span>
                   </button>
 
-                  {/* Step 3: Open PDF blueprint with red error highlights */}
+                  {/* Open PDF blueprint with red error highlights */}
                   <button
                     onClick={() => {
                       onSelectObject(obj.id);
@@ -370,28 +467,49 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     title={`Открыть интерактивный чертеж с красной подсветкой ошибок для «${obj.name}»`}
                   >
                     <Eye className="w-3.5 h-3.5 text-rose-600" />
-                    <span>Чертеж с ошибками (Красный PDF)</span>
+                    <span>Чертеж с ошибками (PDF)</span>
                   </button>
                 </div>
 
-                <div className="flex items-center justify-between gap-2">
-                  <button
-                    onClick={() => onOpenExport(obj)}
-                    className="px-3 py-2 text-xs font-medium text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg flex items-center space-x-1.5 transition-colors cursor-pointer"
-                  >
-                    <Download className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Экспорт</span>
-                  </button>
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={() => onOpenExport(obj)}
+                      className="px-3 py-2 text-xs font-medium text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg flex items-center space-x-1.5 transition-colors cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Экспорт</span>
+                    </button>
+
+                    {onToggleVerifiedAndSent && (
+                      <button
+                        onClick={() => onToggleVerifiedAndSent(obj.id)}
+                        className={`px-2.5 py-2 text-xs font-bold rounded-lg border transition-colors flex items-center space-x-1 cursor-pointer ${
+                          isVerifiedAndSent
+                            ? 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200'
+                            : 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
+                        }`}
+                        title={isVerifiedAndSent ? 'Снять отметку отправки' : 'Отметить полную проверку и отправить отчет'}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>{isVerifiedAndSent ? 'Отозвать отчет' : 'Завершить и отправить отчет'}</span>
+                      </button>
+                    )}
+                  </div>
 
                   <button
                     onClick={() => {
                       onSelectObject(obj.id);
                       onNavigateToVerification(obj.id);
                     }}
-                    className="px-4 py-2 text-xs font-semibold text-white bg-purple-700 hover:bg-purple-800 rounded-lg flex items-center space-x-1.5 shadow-sm transition-colors cursor-pointer"
+                    className={`px-4 py-2 text-xs font-bold rounded-lg flex items-center space-x-1.5 shadow-sm transition-all cursor-pointer ${
+                      isVerifiedAndSent
+                        ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                        : 'bg-purple-700 hover:bg-purple-800 text-white'
+                    }`}
                   >
                     <FileCheck2 className="w-3.5 h-3.5" />
-                    <span>Верификация протокола</span>
+                    <span>{isVerifiedAndSent ? 'Протокол проверки (Завершен)' : 'Верификация протокола'}</span>
                     <ChevronRight className="w-3.5 h-3.5 ml-1" />
                   </button>
                 </div>

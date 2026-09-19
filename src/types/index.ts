@@ -221,6 +221,9 @@ export interface ConstructionObject {
     };
     status: 'SYNCED' | 'PENDING' | 'ERROR';
   };
+  is_verified_and_sent?: boolean;
+  verified_and_sent_at?: string;
+  sent_report_id?: string;
 }
 
 // Протокол проверки
@@ -236,6 +239,9 @@ export interface InspectionProtocol {
   created_at: string;
   finalized_at?: string;
   finalized_by?: string;
+  ukep_signature?: string;
+  signed_at?: string;
+  signed_by?: string;
   iais_sync_status: 'NOT_SYNCED' | 'PENDING_SYNC' | 'SYNCED' | 'ERROR';
   iais_sync_time?: string;
   iais_prescription_status?: 'ISSUED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'EXTENDED';
