@@ -1,0 +1,28 @@
+{
+  "model_name": "InspectorAI-Hypothesis-Transformer-v2.4",
+  "version": "2.4.2-altufievo-finetuned",
+  "base_architecture": "LayoutLMv3-CrossAttention-Engineering",
+  "vocab_size": 50265,
+  "hidden_size": 768,
+  "num_hidden_layers": 12,
+  "num_attention_heads": 12,
+  "intermediate_size": 3072,
+  "max_position_embeddings": 1024,
+  "max_2d_position_embeddings": 1024,
+  "coordinate_size": 128,
+  "shape_size": 128,
+  "classifier_dropout": 0.1,
+  "num_classes_matrix": 132,
+  "num_hypothesis_types": 4,
+  "fine_tuned_dataset": "MOSGOSSTROY-ALTUFIEVO-79B-2026",
+  "fine_tuned_date": "2026-07-11T18:30:00Z",
+  "training_metrics": {
+    "final_loss": 0.0762,
+    "char_accuracy": 0.988,
+    "exact_match": 0.952,
+    "bbox_iou": 0.972,
+    "f1_score": 0.968,
+    "recall_violations": 0.945,
+    "precision_violations": 0.982
+  }
+}

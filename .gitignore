@@ -1,0 +1,9 @@
+ВКР РР/mri_dataset.npz
+*.pth
+node_modules/
+dist/
+.idea/
+.env
+.env.local
+.DS_Store
+*.log
