@@ -24,3 +24,36 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
 }
+
+/* Authentic PDF Text Layer (selectable text over canvas) */
+.pdf-text-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  line-height: 1;
+  text-align: initial;
+  pointer-events: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.pdf-text-layer span {
+  color: transparent !important;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  pointer-events: all;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.pdf-text-layer ::selection {
+  background: rgba(59, 130, 246, 0.38) !important;
+  color: transparent !important;
+}
+
+.pdf-text-layer span::selection {
+  background: rgba(59, 130, 246, 0.38) !important;
+  color: transparent !important;
+}

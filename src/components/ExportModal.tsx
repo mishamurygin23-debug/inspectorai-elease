@@ -7,15 +7,19 @@ import {
   FileCode,
   CheckCircle2,
   Printer,
-  ShieldCheck
+  ShieldCheck,
+  Check
 } from 'lucide-react';
-import { ConstructionObject, InspectionProtocol } from '../types';
+import { ConstructionObject, InspectionProtocol, Suspicion } from '../types';
+import { downloadFullDocumentReport, downloadStructuredTextReport, triggerFileDownload } from '../utils/reportGenerator';
+import { INITIAL_SUSPICIONS } from '../data/mockData';
 
 interface ExportModalProps {
   isOpen: boolean;
   onClose: () => void;
   object: ConstructionObject;
   protocol: InspectionProtocol;
+  suspicions?: Suspicion[];
 }
 
 export const ExportModal: React.FC<ExportModalProps> = ({
@@ -23,6 +27,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   onClose,
   object,
   protocol,
+  suspicions = INITIAL_SUSPICIONS,
 }) => {
   const [selectedFormat, setSelectedFormat] = useState<'PDF' | 'DOCX' | 'XML' | 'JSON'>('PDF');
   const [isExporting, setIsExporting] = useState<boolean>(false);
@@ -32,14 +37,74 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   const handleDownload = () => {
     setIsExporting(true);
-    setTimeout(() => {
+
+    try {
+      if (selectedFormat === 'PDF') {
+        // Downloads complete standalone HTML dossier report with highlighted text, printable to PDF
+        downloadFullDocumentReport({ object, protocol, suspicions });
+      } else if (selectedFormat === 'DOCX') {
+        downloadStructuredTextReport({ object, protocol, suspicions });
+      } else if (selectedFormat === 'JSON') {
+        const jsonContent = JSON.stringify(
+          {
+            object,
+            protocol,
+            suspicions,
+            exported_at: new Date().toISOString(),
+            engine_version: '2.4.2-altufievo',
+          },
+          null,
+          2
+        );
+        triggerFileDownload(jsonContent, `Protocol_${protocol.id}_${object.permit_number}.json`, 'application/json');
+      } else if (selectedFormat === 'XML') {
+        const xmlContent = `<?xml version="1.0" encoding="UTF-8"?>
+<InspectionProtocol id="${protocol.id}" version="${protocol.version}" objectId="${object.id}">
+  <ObjectInfo>
+    <Name>${object.name}</Name>
+    <Address>${object.address}</Address>
+    <Permit>${object.permit_number}</Permit>
+  </ObjectInfo>
+  <Findings count="${protocol.findings.length}">
+    ${protocol.findings
+      .map(
+        (f) => `
+    <Finding code="${f.param_code}" status="${f.finding_status}">
+      <ParamName>${f.param_name}</ParamName>
+      <Section>${f.section}</Section>
+      <Expected>${f.expected_value}</Expected>
+      <Actual>${f.actual_value}</Actual>
+      <Delta>${f.delta}</Delta>
+      <Norm>${f.normative_reference || ''}</Norm>
+    </Finding>`
+      )
+      .join('')}
+  </Findings>
+  <Suspicions count="${suspicions.length}">
+    ${suspicions
+      .map(
+        (s) => `
+    <Suspicion id="${s.suspicion_id}" method="${s.discovery_method}" priority="${s.review_priority}">
+      <Description>${s.description}</Description>
+      <NormativeBase>${s.normative_base}</NormativeBase>
+    </Suspicion>`
+      )
+      .join('')}
+  </Suspicions>
+</InspectionProtocol>`;
+        triggerFileDownload(xmlContent, `Protocol_${protocol.id}_IAIS_RIN.xml`, 'application/xml');
+      }
+
       setIsExporting(false);
       setDownloadSuccess(true);
       setTimeout(() => {
         setDownloadSuccess(false);
         onClose();
-      }, 1400);
-    }, 900);
+      }, 2000);
+    } catch (e) {
+      console.error(e);
+      setIsExporting(false);
+    }
   };
 
   const confirmedFindings = protocol.findings.filter((f) => f.finding_status === 'CONFIRMED_VIOLATION');
@@ -80,6 +145,19 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             <div>Подтвержденных нарушений: <strong className="text-rose-700">{confirmedFindings.length}</strong></div>
             <div>Отрицательных эталонов: <strong className="text-emerald-700">{negativeFindings.length}</strong></div>
           </div>
+        </div>
+
+        {/* Highlighted text feature notice */}
+        <div className="p-3 bg-purple-50 rounded-xl border border-purple-200 text-xs text-purple-900 space-y-1">
+          <div className="font-bold flex items-center gap-1.5 text-purple-800">
+            <span>🖍️</span>
+            <span>В отчет включается подробный анализ текста:</span>
+          </div>
+          <ul className="text-[11px] text-purple-700 list-disc list-inside space-y-0.5">
+            <li>Точный фрагмент текста из чертежа с маркером выделения;</li>
+            <li>Разъяснение, что это за текст и где он расположен на листе;</li>
+            <li>Детальный разбор, что именно неправильно (ПД vs РД, дельта, нарушенные СП).</li>
+          </ul>
         </div>
 
         {/* Format Selector: PDF, DOCX, XML, JSON */}

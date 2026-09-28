@@ -157,6 +157,9 @@ export interface Suspicion {
   finding_status: 'SUSPICION';
   inspector_status: 'PENDING' | 'PROMOTED_TO_CANDIDATE' | 'DISMISSED';
   promoted_finding_id?: string;
+  discipline?: string; // Раздел: АР, КР, ОВ, ВК, ЭОМ, СПЗ, ПЗУ, ПОС, ТХ
+  tz_requirement_code?: string; // Пункт ТЗ / Технического регламента
+  is_custom_user_hypothesis?: boolean; // Создано пользователем в конструкторе ТЗ
 }
 
 // Загруженный документ
@@ -219,7 +222,7 @@ export interface ConstructionObject {
       valid_until: string;
       valid: boolean;
     };
-    status: 'SYNCED' | 'PENDING' | 'ERROR';
+    status: 'SYNCED' | 'PENDING' | 'PENDING_SYNC' | 'NOT_SYNCED' | 'ERROR';
   };
   is_verified_and_sent?: boolean;
   verified_and_sent_at?: string;

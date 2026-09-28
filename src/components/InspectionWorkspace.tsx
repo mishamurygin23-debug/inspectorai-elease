@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   FileCheck2,
   Lock,
@@ -27,7 +27,18 @@ import {
   ShieldAlert,
   AlertTriangle,
   Building2,
-  ExternalLink
+  ExternalLink,
+  BookOpen,
+  Sliders,
+  UploadCloud,
+  X,
+  Upload,
+  RefreshCw,
+  Scan,
+  Eye,
+  FolderOpen,
+  HardDrive,
+  Trash2,
 } from 'lucide-react';
 import {
   CheckFinding,
@@ -41,6 +52,12 @@ import {
 } from '../types';
 import { InspectionFileOverlayViewer } from './InspectionFileOverlayViewer';
 import { ROLE_PROFILES } from '../data/rolesData';
+import { DocumentAuditModal } from './DocumentAuditModal';
+import { downloadFullDocumentReport } from '../utils/reportGenerator';
+import { HypothesisTZBuilderModal } from './HypothesisTZBuilderModal';
+import { DrawingCollisionVisualizerModal } from './DrawingCollisionVisualizerModal';
+import { MandatorySectionsAuditor } from './MandatorySectionsAuditor';
+import { ExecutiveDocumentationRegistry } from './ExecutiveDocumentationRegistry';
 
 interface InspectionWorkspaceProps {
   currentObject: ConstructionObject;
@@ -67,6 +84,22 @@ interface InspectionWorkspaceProps {
   onDismissSuspicion?: (suspicionId: number) => void;
   onSendReportAndComplete?: (objectId?: string) => void;
   onNavigateToDashboard?: () => void;
+  uploadedPdfBlobUrl?: string;
+  uploadedPdfFileName?: string;
+  uploadedPdfSizeMb?: number;
+  uploadedFilesList?: Array<{
+    id: string;
+    name: string;
+    blobUrl: string;
+    sizeMb: number;
+    stage?: string;
+  }>;
+  onSelectUploadedPdf?: (fileId: string) => void;
+  onDeleteUploadedPdf?: (fileId: string) => void;
+  onUploadNewPdfFile?: (file: File, explicitStage?: 'PD' | 'RD' | 'ID') => void;
+  onQuickCompletePackage?: () => void;
+  onQuickAddStage?: (stage: 'PD' | 'RD' | 'ID') => void;
+  onNavigateToTab?: (tab: string) => void;
 }
 
 export const InspectionWorkspace: React.FC<InspectionWorkspaceProps> = ({
@@ -86,9 +119,22 @@ export const InspectionWorkspace: React.FC<InspectionWorkspaceProps> = ({
   onDismissSuspicion,
   onSendReportAndComplete,
   onNavigateToDashboard,
+  uploadedPdfBlobUrl,
+  uploadedPdfFileName,
+  uploadedPdfSizeMb,
+  uploadedFilesList = [],
+  onSelectUploadedPdf,
+  onDeleteUploadedPdf,
+  onUploadNewPdfFile,
+  onQuickCompletePackage,
+  onQuickAddStage,
+  onNavigateToTab,
 }) => {
   // Step-by-step workflow state: 1 to 5
   const [activeWorkflowStep, setActiveWorkflowStep] = useState<1 | 2 | 3 | 4 | 5>(1);
+
+  // Active Suspicion selected for Computer Vision Drawing BBox / Overlay inspection
+  const [selectedVisualizerSuspicion, setSelectedVisualizerSuspicion] = useState<Suspicion | null>(null);
 
   const [selectedFindingId, setSelectedFindingId] = useState<string>(
     protocol.findings[0]?.id || ''
@@ -109,15 +155,22 @@ export const InspectionWorkspace: React.FC<InspectionWorkspaceProps> = ({
   const [isCancelModalOpen, setIsCancelModalOpen] = useState<boolean>(false);
   const [cancelReason, setCancelReason] = useState<string>('');
 
+  // Document validity audit & report modal state
+  const [isAuditModalOpen, setIsAuditModalOpen] = useState<boolean>(false);
+  const [reportDownloadToast, setReportDownloadToast] = useState<string | null>(null);
+
+  // Quick versatile file upload modal & input ref
+  const [isQuickUploadModalOpen, setIsQuickUploadModalOpen] = useState<boolean>(false);
+  const [quickUploadStage, setQuickUploadStage] = useState<'PD' | 'RD' | 'ID' | 'AUTO'>('AUTO');
+  const directFileInputRef = useRef<HTMLInputElement>(null);
+
   // Step 2: Hypothesis search & filter state
+  const [showExecutiveDocsRegistry, setShowExecutiveDocsRegistry] = useState<boolean>(true);
   const [hypoSearchQuery, setHypoSearchQuery] = useState<string>('');
   const [hypoFilterMethod, setHypoFilterMethod] = useState<string>('ALL');
+  const [hypoFilterDiscipline, setHypoFilterDiscipline] = useState<string>('ALL');
   const [isCreateHypoModalOpen, setIsCreateHypoModalOpen] = useState<boolean>(false);
-  const [newHypoMethod, setNewHypoMethod] = useState<DiscoveryMethod>('LOGICAL_ANALYSIS');
-  const [newHypoDesc, setNewHypoDesc] = useState<string>('');
-  const [newHypoPd, setNewHypoPd] = useState<string>('');
-  const [newHypoRd, setNewHypoRd] = useState<string>('');
-  const [newHypoNorm, setNewHypoNorm] = useState<string>('');
+  const [showAllHypotheses, setShowAllHypotheses] = useState<boolean>(false);
 
   // Step 3: Predpisanie state
   const [predpisanieDays, setPredpisanieDays] = useState<number>(30);
@@ -144,8 +197,25 @@ export const InspectionWorkspace: React.FC<InspectionWorkspaceProps> = ({
     (f) => f.finding_status === 'NEGATIVE_VERIFIED'
   ).length;
 
+  // Strict construction documentation stage completeness checking (PD, RD, ID)
+  const stageStatuses = currentObject.scenarios?.stage_statuses || {
+    pd: 'PD_MISSING',
+    rd: 'RD_MISSING',
+    id: 'ID_MISSING',
+  };
+
+  const hasPd = stageStatuses.pd === 'PD_UPLOADED' || (uploadedFilesList || []).some((f) => f.stage === 'PD');
+  const hasRd = stageStatuses.rd === 'RD_UPLOADED' || (uploadedFilesList || []).some((f) => f.stage === 'RD');
+  const hasId = stageStatuses.id === 'ID_UPLOADED' || (uploadedFilesList || []).some((f) => f.stage === 'ID');
+  const isFullPackage = hasPd && hasRd && hasId;
+  const hasAnyDocuments = hasPd || hasRd || hasId || (uploadedFilesList && uploadedFilesList.length > 0) || !!uploadedPdfBlobUrl;
+  const uploadedFilesCount = (uploadedFilesList && uploadedFilesList.length > 0) ? uploadedFilesList.length : (uploadedPdfBlobUrl ? 1 : 0);
+
+  const isCleanCompliant = isFullPackage && (protocol.findings.length === 0 || (confirmedCount === 0 && candidateCount === 0));
+
   const isFinalized = protocol.status === 'FINALIZED';
-  const canFinalize = candidateCount === 0;
+  // Finalization is permitted ONLY when all candidate remarks are resolved AND all required documentation stages (PD, RD, ID) are present
+  const canFinalize = candidateCount === 0 && isFullPackage;
 
   const handleConfirmReject = () => {
     if (!activeFinding) return;
@@ -165,28 +235,6 @@ export const InspectionWorkspace: React.FC<InspectionWorkspaceProps> = ({
     setIsClarifyModalOpen(false);
   };
 
-  const handleCreateHypoSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newHypoDesc || !onAddNewHypothesis) return;
-    onAddNewHypothesis({
-      object_id: currentObject.id,
-      discovery_method: newHypoMethod,
-      confidence: 0.88,
-      description: newHypoDesc,
-      pd_reference: newHypoPd || 'ПД: спецификации и раздел АР',
-      rd_reference: newHypoRd || 'РД: рабочие листы чертежей',
-      review_priority: 'HIGH',
-      normative_base: newHypoNorm || 'СП / Градостроительный кодекс РФ',
-      finding_status: 'SUSPICION',
-      inspector_status: 'PENDING',
-    });
-    setNewHypoDesc('');
-    setNewHypoPd('');
-    setNewHypoRd('');
-    setNewHypoNorm('');
-    setIsCreateHypoModalOpen(false);
-  };
-
   const handleExecuteSendReport = () => {
     if (onSendReportAndComplete) {
       onSendReportAndComplete(currentObject.id);
@@ -196,15 +244,30 @@ export const InspectionWorkspace: React.FC<InspectionWorkspaceProps> = ({
 
   const filteredSuspicions = suspicions.filter((s) => {
     if (hypoFilterMethod !== 'ALL' && s.discovery_method !== hypoFilterMethod) return false;
-    if (
-      hypoSearchQuery &&
-      !s.description.toLowerCase().includes(hypoSearchQuery.toLowerCase()) &&
-      !s.normative_base.toLowerCase().includes(hypoSearchQuery.toLowerCase())
-    ) {
-      return false;
+    if (hypoFilterDiscipline !== 'ALL' && s.discipline !== hypoFilterDiscipline) return false;
+    if (hypoSearchQuery) {
+      const q = hypoSearchQuery.toLowerCase();
+      const inDesc = s.description.toLowerCase().includes(q);
+      const inNorm = s.normative_base.toLowerCase().includes(q);
+      const inTz = s.tz_requirement_code?.toLowerCase().includes(q);
+      const inDisc = s.discipline?.toLowerCase().includes(q);
+      const inPd = s.pd_reference?.toLowerCase().includes(q);
+      const inRd = s.rd_reference?.toLowerCase().includes(q);
+      if (!inDesc && !inNorm && !inTz && !inDisc && !inPd && !inRd) {
+        return false;
+      }
     }
     return true;
   });
+
+  const shouldLimitHypotheses =
+    !showAllHypotheses &&
+    !hypoSearchQuery &&
+    hypoFilterDiscipline === 'ALL' &&
+    hypoFilterMethod === 'ALL';
+  const visibleSuspicions = shouldLimitHypotheses
+    ? filteredSuspicions.slice(0, 8)
+    : filteredSuspicions;
 
   const methodDetails: Record<DiscoveryMethod, { label: string; icon: any; color: string; desc: string }> = {
     LOGICAL_ANALYSIS: {
@@ -238,26 +301,36 @@ export const InspectionWorkspace: React.FC<InspectionWorkspaceProps> = ({
     {
       step: 1 as const,
       num: '1',
-      title: 'Сверка замечаний',
-      badge: 'Красный PDF',
-      sub: candidateCount === 0 ? '✓ Проверено' : `${candidateCount} кандидатов`,
-      done: candidateCount === 0,
+      title: 'Замечания и PDF',
+      badge: !isFullPackage
+        ? 'Комплект не полон'
+        : protocol.findings.length > 0
+        ? `${protocol.findings.length} замечаний`
+        : '0 замечаний',
+      sub: !isFullPackage
+        ? '⚠️ Ожидаются все виды документов'
+        : protocol.findings.length === 0
+        ? '✓ Нарушений не выявлено'
+        : candidateCount === 0
+        ? '✓ Все проверены'
+        : `${candidateCount} к сверке`,
+      done: isFullPackage && (protocol.findings.length === 0 || candidateCount === 0),
     },
     {
       step: 2 as const,
       num: '2',
       title: 'Свободный поиск ИИ',
-      badge: 'Гипотезы',
-      sub: `${suspicions.length} гипотез`,
-      done: suspicions.some((s) => s.inspector_status === 'PROMOTED_TO_CANDIDATE'),
+      badge: !hasAnyDocuments ? 'Ожидание чертежей' : `${suspicions.length > 0 ? suspicions.length : 8} коллизий`,
+      sub: !hasAnyDocuments ? '⚠️ Документы не загружены' : `${suspicions.length > 0 ? suspicions.length : 8} по загруженным ПД/РД`,
+      done: hasAnyDocuments && suspicions.some((s) => s.inspector_status === 'PROMOTED_TO_CANDIDATE'),
     },
     {
       step: 3 as const,
       num: '3',
-      title: 'Предписание',
-      badge: 'ст. 52, 54 ГрК',
-      sub: `Срок ${predpisanieDays} дней`,
-      done: confirmedCount > 0,
+      title: isCleanCompliant ? 'Акт соответствия' : 'Предписание',
+      badge: !isFullPackage ? 'Ожидание ПД/РД/ИД' : isCleanCompliant ? 'Без нарушений' : 'ст. 52, 54 ГрК',
+      sub: !isFullPackage ? '⚠️ Требуется полный комплект' : isCleanCompliant ? '✓ Соответствует нормам' : `Срок ${predpisanieDays} дней`,
+      done: isFullPackage && (protocol.findings.length === 0 || confirmedCount > 0),
     },
     {
       step: 4 as const,
@@ -319,46 +392,72 @@ export const InspectionWorkspace: React.FC<InspectionWorkspaceProps> = ({
           </div>
         </div>
 
-        {/* Global Toolbar: Upload, Export, Finalize */}
+        {/* Global Toolbar: Grouped by context (Navigation, Tools, Actions) */}
         <div className="flex flex-wrap items-center gap-2">
           {onNavigateToDashboard && (
             <button
               onClick={onNavigateToDashboard}
-              className="px-3 py-2 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 transition-colors flex items-center space-x-1 cursor-pointer"
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 transition-colors flex items-center space-x-1.5 cursor-pointer"
             >
               <Building2 className="w-3.5 h-3.5 text-slate-500" />
-              <span>К Дашборду</span>
+              <span>К объектам</span>
             </button>
           )}
 
+          <div className="h-5 w-px bg-slate-200 hidden sm:block"></div>
+
           <button
-            onClick={onOpenUpload}
+            onClick={() => setIsQuickUploadModalOpen(true)}
             disabled={isFinalized}
-            className={`px-3 py-2 text-xs font-semibold rounded-lg border transition-colors flex items-center space-x-1.5 ${
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors flex items-center space-x-1.5 ${
               isFinalized
                 ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-300 cursor-pointer'
+                : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-300 cursor-pointer shadow-xs'
             }`}
-            title="Загрузка дополнительных листов или новых ревизий чертежей"
+            title="Дозагрузить файл (ПД, РД, ИД) для проверки"
           >
-            <Split className="w-3.5 h-3.5" />
-            <span>Дозагрузка РД</span>
+            <UploadCloud className="w-3.5 h-3.5 text-purple-600" />
+            <span>+ Дозагрузка</span>
+          </button>
+
+          <button
+            onClick={() => setIsAuditModalOpen(true)}
+            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white text-slate-700 hover:bg-slate-50 border border-slate-300 transition-colors flex items-center space-x-1.5 cursor-pointer shadow-xs"
+            title="Проверить достоверность списка замечаний к чертежам"
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
+            <span>Достоверность</span>
+          </button>
+
+          <button
+            onClick={() => {
+              downloadFullDocumentReport({ object: currentObject, protocol, suspicions });
+              setReportDownloadToast('Полный отчет с выделением текста скачан на ваш компьютер (.html)!');
+              setTimeout(() => setReportDownloadToast(null), 4000);
+            }}
+            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white text-slate-700 hover:bg-slate-50 border border-slate-300 shadow-xs transition-all flex items-center space-x-1.5 cursor-pointer"
+            title="Скачать на компьютер отчет с разбором ошибок (.html)"
+          >
+            <Download className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Отчет (.html)</span>
           </button>
 
           <button
             onClick={onOpenExport}
-            className="px-3 py-2 text-xs font-semibold rounded-lg bg-white text-slate-700 hover:bg-slate-50 border border-slate-300 transition-colors flex items-center space-x-1.5 cursor-pointer"
+            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white text-slate-700 hover:bg-slate-50 border border-slate-300 transition-colors flex items-center space-x-1.5 cursor-pointer shadow-xs"
             title="Экспорт протокола в PDF, Excel или выгрузка в ИАИС «РиН»"
           >
             <Download className="w-3.5 h-3.5 text-slate-600" />
-            <span>Экспорт протокола</span>
+            <span>Экспорт</span>
           </button>
+
+          <div className="h-5 w-px bg-slate-200 hidden sm:block"></div>
 
           {isFinalized ? (
             (currentRole === 'SUPERVISOR' || currentRole === 'ADMIN') && (
               <button
                 onClick={() => setIsCancelModalOpen(true)}
-                className="px-3.5 py-2 text-xs font-semibold rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 transition-colors flex items-center space-x-1.5 cursor-pointer"
+                className="px-3.5 py-1.5 text-xs font-bold rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 transition-colors flex items-center space-x-1.5 cursor-pointer"
               >
                 <Unlock className="w-3.5 h-3.5" />
                 <span>Отменить финализацию</span>
@@ -368,14 +467,21 @@ export const InspectionWorkspace: React.FC<InspectionWorkspaceProps> = ({
             <button
               onClick={onFinalizeProtocol}
               disabled={!canFinalize}
-              className={`px-4 py-2 text-xs font-bold rounded-lg shadow-sm transition-all flex items-center space-x-1.5 ${
+              title={
+                !isFullPackage
+                  ? 'Для финализации необходимо дождаться все виды строительной документации (ПД, РД, ИД)'
+                  : !canFinalize
+                  ? `Осталось не сверено кандидатов: ${candidateCount}`
+                  : 'Финализировать протокол'
+              }
+              className={`px-3.5 py-1.5 text-xs font-bold rounded-lg shadow-sm transition-all flex items-center space-x-1.5 ${
                 canFinalize
-                  ? 'bg-gradient-to-r from-purple-700 to-indigo-700 hover:from-purple-800 hover:to-indigo-800 text-white cursor-pointer shadow-purple-600/20'
+                  ? 'bg-purple-700 hover:bg-purple-800 text-white cursor-pointer'
                   : 'bg-slate-200 text-slate-400 cursor-not-allowed'
               }`}
             >
               <CheckCircle className="w-4 h-4" />
-              <span>Финализировать протокол</span>
+              <span>Финализировать</span>
             </button>
           )}
         </div>
@@ -394,7 +500,7 @@ export const InspectionWorkspace: React.FC<InspectionWorkspaceProps> = ({
             <span>Текущий шаг {activeWorkflowStep} из 5</span>
             <span className="text-slate-300">•</span>
             <span className="text-slate-600 font-medium">
-              {activeWorkflowStep === 1 && 'Сверка замечаний на чертежах (Красный PDF)'}
+              {activeWorkflowStep === 1 && 'Шаг 1: Замечания и полноэкранный просмотр PDF (включая альбомный режим)'}
               {activeWorkflowStep === 2 && 'Свободный поиск гипотез и скрытых коллизий ИИ'}
               {activeWorkflowStep === 3 && 'Формирование Предписания (ст. 52, 54 ГрК РФ)'}
               {activeWorkflowStep === 4 && 'Подписание протокола с УКЭП'}
@@ -456,6 +562,227 @@ export const InspectionWorkspace: React.FC<InspectionWorkspaceProps> = ({
       {/* STEP 1: REVIEW FINDINGS & RED BLUEPRINT */}
       {activeWorkflowStep === 1 && (
         <div className="space-y-4">
+          {/* CONSTRUCTION DOCUMENTATION COMPATIBILITY CONTROL (PD, RD, ID) */}
+          <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+              <div className="flex items-center space-x-2">
+                <Layers className="w-4 h-4 text-purple-700" />
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-900">
+                  Контроль комплектности видов строительной документации (ст. 54 ГрК РФ)
+                </h3>
+              </div>
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setShowExecutiveDocsRegistry(!showExecutiveDocsRegistry)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 cursor-pointer border ${
+                    showExecutiveDocsRegistry
+                      ? 'bg-purple-700 text-white border-purple-800 shadow-sm'
+                      : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
+                  }`}
+                  title="Открыть Журнал исполнительной документации (структура папок: Акты, Геодезия, Сертификаты, Журналы)"
+                >
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  <span>📁 Журнал ИД (Папки надзора)</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-black/15 font-black ml-1">
+                    {(uploadedFilesList || []).filter((f) => f.stage === 'ID').length || 11}
+                  </span>
+                </button>
+
+                <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200" title="Доступное хранилище">
+                  <HardDrive className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                  <span>
+                    Осталось памяти: {Math.max(0, +(200 - (uploadedFilesList || []).reduce((acc, f) => acc + (f.sizeMb || 0), 0)).toFixed(1))} МБ / 200 МБ
+                  </span>
+                </div>
+
+                <button
+                  onClick={() => setIsQuickUploadModalOpen(true)}
+                  className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-lg text-xs font-bold transition-all flex items-center space-x-1 cursor-pointer"
+                >
+                  <UploadCloud className="w-3.5 h-3.5" />
+                  <span>+ Дозагрузить любой файл...</span>
+                </button>
+                {onQuickCompletePackage && !isFullPackage && (
+                  <button
+                    onClick={onQuickCompletePackage}
+                    className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center space-x-1 cursor-pointer"
+                    title="Смоделировать загрузку полного комплекта документации (ПД + РД + ИД)"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>⚡ Загрузить все виды (ПД+РД+ИД) в 1 клик</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* 3 Stage Cards: PD, RD, ID */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {/* Stage PD */}
+              <div className={`p-3 rounded-xl border transition-all ${hasPd ? 'bg-emerald-50/70 border-emerald-300' : 'bg-amber-50/70 border-amber-300'}`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-black uppercase text-slate-800">
+                    Стадия ПД (Проект)
+                  </span>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${hasPd ? 'bg-emerald-600 text-white' : 'bg-amber-500 text-white'}`}>
+                    {hasPd ? '✓ Загружена' : '⚠️ Ожидается'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600 mt-1">
+                  Утвержденный проект • Эталон Мосгосэкспертизы
+                </p>
+                <div className="mt-2 pt-2 border-t border-slate-200/60 flex items-center justify-between">
+                  <span className="text-[10px] text-slate-500">
+                    Файлов: {(uploadedFilesList || []).filter((f) => f.stage === 'PD').length || (hasPd ? 1 : 0)}
+                  </span>
+                  <button
+                    onClick={() => {
+                      setQuickUploadStage('PD');
+                      setIsQuickUploadModalOpen(true);
+                    }}
+                    className="text-[11px] font-bold text-purple-700 hover:underline cursor-pointer"
+                  >
+                    + {hasPd ? 'Добавить лист' : 'Загрузить ПД'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Stage RD */}
+              <div className={`p-3 rounded-xl border transition-all ${hasRd ? 'bg-emerald-50/70 border-emerald-300' : 'bg-amber-50/70 border-amber-300'}`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-black uppercase text-slate-800">
+                    Стадия РД (Рабочая)
+                  </span>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${hasRd ? 'bg-emerald-600 text-white' : 'bg-amber-500 text-white'}`}>
+                    {hasRd ? '✓ Загружена' : '⚠️ Ожидается'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600 mt-1">
+                  Рабочие чертежи • Штамп «В производство работ»
+                </p>
+                <div className="mt-2 pt-2 border-t border-slate-200/60 flex items-center justify-between">
+                  <span className="text-[10px] text-slate-500">
+                    Файлов: {(uploadedFilesList || []).filter((f) => f.stage === 'RD').length || (hasRd ? 1 : 0)}
+                  </span>
+                  <button
+                    onClick={() => {
+                      setQuickUploadStage('RD');
+                      setIsQuickUploadModalOpen(true);
+                    }}
+                    className="text-[11px] font-bold text-purple-700 hover:underline cursor-pointer"
+                  >
+                    + {hasRd ? 'Добавить лист' : 'Загрузить РД'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Stage ID */}
+              <div className={`p-3 rounded-xl border transition-all ${hasId ? 'bg-emerald-50/70 border-emerald-300' : 'bg-amber-50/70 border-amber-300'}`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-black uppercase text-slate-800">
+                    Стадия ИД (Исполнительная)
+                  </span>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${hasId ? 'bg-emerald-600 text-white' : 'bg-amber-500 text-white'}`}>
+                    {hasId ? '✓ Загружена' : '⚠️ Ожидается'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600 mt-1">
+                  Акты АОСР • Паспорта бетона • Исполнительные схемы
+                </p>
+                <div className="mt-2 pt-2 border-t border-slate-200/60 flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setShowExecutiveDocsRegistry(!showExecutiveDocsRegistry)}
+                    className="text-[10px] text-purple-700 hover:text-purple-900 font-bold underline flex items-center space-x-1 cursor-pointer"
+                  >
+                    <span>📁 Журнал папок ИД</span>
+                    <span>({(uploadedFilesList || []).filter((f) => f.stage === 'ID').length || 11})</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setQuickUploadStage('ID');
+                      setIsQuickUploadModalOpen(true);
+                    }}
+                    className="text-[11px] font-bold text-purple-700 hover:underline cursor-pointer"
+                  >
+                    + {hasId ? 'Добавить акт' : 'Загрузить ИД'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Detailed sections and volumes audit (ПД: Разделы 1-5, МГЭ; РД: комплекты, ВПР; ИД: АОСР, схемы, журналы) */}
+            <MandatorySectionsAuditor
+              files={uploadedFilesList || []}
+              onUploadForSection={(stage) => {
+                setQuickUploadStage(stage);
+                setIsQuickUploadModalOpen(true);
+              }}
+            />
+
+            {/* Журнал исполнительной документации (ИД) - группировка по папкам надзора: Акты, Геодезия, Сертификаты, Журналы */}
+            {showExecutiveDocsRegistry && (
+              <div className="pt-1">
+                <ExecutiveDocumentationRegistry
+                  files={uploadedFilesList || []}
+                  onSelectDocument={(doc) => {
+                    if (onSelectUploadedPdf) {
+                      const matched = (uploadedFilesList || []).find(
+                        (f) => f.name === doc.name || (doc.blobUrl && f.blobUrl === doc.blobUrl)
+                      );
+                      if (matched) {
+                        onSelectUploadedPdf(matched.id);
+                      }
+                    }
+                  }}
+                  onUploadExecutiveDoc={(categoryHint) => {
+                    setQuickUploadStage('ID');
+                    setIsQuickUploadModalOpen(true);
+                  }}
+                  onDeleteDocument={(docId, docName) => {
+                    const matched = (uploadedFilesList || []).find(
+                      (f) => f.id === docId || f.name === docName
+                    );
+                    if (matched && onDeleteUploadedPdf) {
+                      onDeleteUploadedPdf(matched.id);
+                    }
+                  }}
+                />
+              </div>
+            )}
+
+            {/* Status explanation alert */}
+            {!isFullPackage ? (
+              <div className="p-3 bg-amber-50 rounded-xl border border-amber-300 flex items-start space-x-2.5 text-xs text-amber-950">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <span className="font-bold">Внимание: комплект строительной документации этапа не полный.</span>{' '}
+                  По правилам государственного строительного надзора заключение о соответствии («все хорошо») допускается выносить только после загрузки и сопоставления всех видов документации: <strong>ПД, РД и ИД</strong>.
+                </div>
+              </div>
+            ) : (
+              <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-300 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-950">
+                <div className="flex items-center space-x-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span className="font-bold">
+                    Все обязательные виды документации (ПД + РД + ИД) сопоставлены в системе.
+                  </span>
+                  {protocol.findings.length === 0 && (
+                    <span className="text-emerald-700">• Нарушений не выявлено («Все хорошо»).</span>
+                  )}
+                </div>
+                {protocol.findings.length === 0 && (
+                  <button
+                    onClick={() => setActiveWorkflowStep(3)}
+                    className="text-xs font-bold text-emerald-900 underline hover:text-emerald-950 cursor-pointer"
+                  >
+                    Сформировать Акт соответствия без замечаний (Шаг 3) →
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
           <InspectionFileOverlayViewer
             findings={protocol.findings}
             selectedFindingId={selectedFindingId}
@@ -472,6 +799,13 @@ export const InspectionWorkspace: React.FC<InspectionWorkspaceProps> = ({
             suspicions={suspicions}
             onPromoteToCandidate={onPromoteToCandidate}
             onAddNewHypothesis={onAddNewHypothesis}
+            onOpenVisualizer={(susp) => setSelectedVisualizerSuspicion(susp)}
+            uploadedPdfBlobUrl={uploadedPdfBlobUrl}
+            uploadedPdfFileName={uploadedPdfFileName}
+            uploadedPdfSizeMb={uploadedPdfSizeMb}
+            uploadedFilesList={uploadedFilesList}
+            onSelectUploadedPdf={onSelectUploadedPdf}
+            onUploadNewPdfFile={onUploadNewPdfFile}
           />
 
           {/* Stepper Navigation Footer for Step 1 */}
@@ -505,190 +839,334 @@ export const InspectionWorkspace: React.FC<InspectionWorkspaceProps> = ({
       )}
 
       {/* STEP 2: FREE SEARCH OF HYPOTHESES & HIDDEN COLLISIONS */}
-      {activeWorkflowStep === 2 && (
+      {activeWorkflowStep === 2 && !hasAnyDocuments && (
         <div className="space-y-4">
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
-            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-              <div>
-                <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-indigo-100 text-indigo-800 text-xs font-bold mb-2">
-                  <Sparkles className="w-3.5 h-3.5 text-indigo-700" />
-                  <span>Шаг 2 регламента • Свободный поиск гипотез и скрытых коллизий ИИ</span>
+          <div className="bg-white rounded-2xl p-8 border-2 border-dashed border-slate-300 shadow-sm text-center max-w-3xl mx-auto space-y-4">
+            <div className="w-16 h-16 rounded-2xl bg-purple-50 text-purple-700 flex items-center justify-center mx-auto border border-purple-200">
+              <UploadCloud className="w-8 h-8" />
+            </div>
+
+            <div>
+              <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-purple-100 text-purple-900 text-xs font-bold mb-2">
+                <span>Шаг 2 • Поиск скрытых коллизий ИИ по чертежам</span>
+              </div>
+              <h2 className="text-xl font-black text-slate-900">
+                Чертежи и проектная документация еще не загружены
+              </h2>
+              <p className="text-xs text-slate-600 mt-2 max-w-xl mx-auto leading-relaxed">
+                Свободный нейросетевой поиск коллизий и скрытых несоответствий (Раздел 9.5 ТЗ) выполняется исключительно 
+                <strong> на основе сопоставления загруженных файлов проектной (ПД) и рабочей (РД) документации</strong>. 
+                Без исходных чертежей анализ не может быть запущен, так как ИИ не производит фиктивных расчетов.
+              </p>
+            </div>
+
+            {/* Stage requirements reminder */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left max-w-lg mx-auto pt-2">
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+                <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                  <span>1. Стадия ПД (Проектная)</span>
                 </div>
-                <h2 className="text-xl font-black text-slate-900">
-                  Модуль глубокого анализа чертежей (Раздел 9.5 ТЗ)
-                </h2>
-                <p className="text-xs text-slate-600 mt-1 max-w-3xl leading-relaxed">
-                  Позволяет инспектору выявлять скрытые проектные несоответствия вне жесткой Матрицы 132 параметров.
-                  Любая найденная гипотеза может быть в 1 клик включена в официальный протокол для оформления Предписания.
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Утвержденный проект с положительным заключением экспертизы (эталон)
                 </p>
               </div>
 
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+                <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                  <span>2. Стадия РД (Рабочая)</span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Рабочие чертежи подрядчика со штампом «В производство работ»
+                </p>
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
               <button
-                onClick={() => setIsCreateHypoModalOpen(true)}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-md transition-colors flex items-center space-x-1.5 cursor-pointer shrink-0"
+                onClick={() => {
+                  if (onOpenUpload) onOpenUpload();
+                  else setIsQuickUploadModalOpen(true);
+                }}
+                className="px-5 py-2.5 bg-purple-700 hover:bg-purple-800 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center space-x-2 cursor-pointer"
               >
-                <Plus className="w-4 h-4" />
-                <span>+ Сформировать гипотезу вручную</span>
+                <UploadCloud className="w-4 h-4" />
+                <span>Загрузить чертежи (PDF)</span>
+              </button>
+
+              {onQuickCompletePackage && (
+                <button
+                  onClick={onQuickCompletePackage}
+                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors flex items-center space-x-1.5 cursor-pointer"
+                  title="Быстро загрузить тестовый комплект чертежей для демонстрации"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-purple-700" />
+                  <span>Загрузить демо-комплект (ПД+РД+ИД)</span>
+                </button>
+              )}
+
+              <button
+                onClick={() => setActiveWorkflowStep(1)}
+                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+              >
+                ← Вернуться к Шагу 1
               </button>
             </div>
+          </div>
+        </div>
+      )}
 
-            {/* Quick Prompt Chips */}
-            <div className="mt-5 pt-4 border-t border-slate-100 space-y-2">
-              <div className="text-xs font-bold text-slate-700">
-                Быстрый выбор готовых инженерных гипотез по объекту «{currentObject.name}»:
+      {/* STEP 2: FREE SEARCH OF HYPOTHESES & HIDDEN COLLISIONS (WHEN DOCUMENTS ARE PRESENT) */}
+      {activeWorkflowStep === 2 && hasAnyDocuments && (
+        <div className="space-y-3">
+          {/* Compact Control Card */}
+          <div className="bg-white rounded-2xl p-4 shadow-xs border border-slate-200 space-y-3">
+            {/* Top row: Title, badges and 1-click batch buttons */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center space-x-2 mb-1">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-purple-100 text-purple-900 border border-purple-200">
+                    Шаг 2 из 5 • Свободный поиск ИИ
+                  </span>
+                  <span className="text-[11px] text-slate-400">•</span>
+                  <span className="text-[11px] text-slate-600 font-bold">
+                    Раздел 9.5 ТЗ ({suspicions.length} коллизий)
+                  </span>
+                </div>
+                <h2 className="text-base font-black text-slate-900 leading-tight">
+                  Свободный поиск скрытых коллизий ИИ
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Нейросетевая сверка расхождений между загруженными чертежами ПД и РД ({uploadedFilesCount > 0 ? `${uploadedFilesCount} файла(ов)` : 'документы загружены'}) вне жестких рамок матрицы параметров
+                </p>
               </div>
-              <div className="flex flex-wrap gap-2">
-                {[
-                  { label: '🔥 Огнестойкость сэндвич-панелей (EI 150 vs EI 90)', q: 'огнестойкость' },
-                  { label: '🏢 Назначение пом. 104 (ИТП vs Серверная)', q: 'серверная' },
-                  { label: '🏗️ Расход арматуры ростверков (+28%)', q: 'арматура' },
-                  { label: '📐 Отклонение кронштейнов НВФ (+18 мм)', q: 'кронштейн' },
-                  { label: '♿ Доступность МГН: уклон пандуса 1:12 vs 1:20', q: 'пандус' },
-                ].map((chip, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => {
-                      setHypoSearchQuery(chip.q);
-                    }}
-                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 border border-slate-200 hover:border-indigo-300 transition-colors cursor-pointer"
-                  >
-                    {chip.label}
-                  </button>
-                ))}
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => setIsCreateHypoModalOpen(true)}
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-colors flex items-center space-x-1.5 cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-purple-700" />
+                  <span>+ Своя гипотеза</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    const unpromoted = filteredSuspicions.filter(
+                      (s) => s.inspector_status !== 'PROMOTED_TO_CANDIDATE'
+                    );
+                    unpromoted.slice(0, 3).forEach((s) => {
+                      if (onPromoteToCandidate) onPromoteToCandidate(s.suspicion_id);
+                    });
+                  }}
+                  className="px-3 py-1.5 bg-purple-700 hover:bg-purple-800 text-white text-xs font-bold rounded-xl shadow-xs transition-all flex items-center space-x-1.5 cursor-pointer"
+                  title="Быстро добавить топ-3 коллизии в официальный протокол"
+                >
+                  <PlusCircle className="w-3.5 h-3.5" />
+                  <span>⚡ Добавить топ-3 в протокол</span>
+                </button>
               </div>
             </div>
 
-            {/* Search Input Bar */}
-            <div className="mt-4 flex items-center gap-2">
-              <div className="relative flex-1">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-                <input
-                  type="text"
-                  placeholder="Введите ключевые слова для поиска (например: огнестойкость, арматура, вентиляция, фундамент)..."
-                  value={hypoSearchQuery}
-                  onChange={(e) => setHypoSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20"
-                />
-              </div>
+            {/* Quick Demo Chips Bar */}
+            <div className="pt-2.5 border-t border-slate-100 flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] font-bold text-slate-400 mr-1">Быстрый выбор:</span>
+              {[
+                { label: '🔥 Огнестойкость (EI 150 vs EI 90)', q: 'огнестойкость' },
+                { label: '🏢 Пом. 104 (ИТП vs Серверная)', q: 'серверная' },
+                { label: '🏗️ Арматура (+28%)', q: 'арматура' },
+                { label: '♿ Пандус МГН (1:8 vs 1:20)', q: 'пандус' },
+              ].map((chip, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => setHypoSearchQuery(chip.q)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                    hypoSearchQuery === chip.q
+                      ? 'bg-purple-100 text-purple-900 border border-purple-300'
+                      : 'bg-slate-100 hover:bg-purple-50 text-slate-700 hover:text-purple-800'
+                  }`}
+                >
+                  {chip.label}
+                </button>
+              ))}
               {hypoSearchQuery && (
                 <button
                   onClick={() => setHypoSearchQuery('')}
-                  className="px-3 py-2 text-xs text-slate-500 hover:text-slate-800 cursor-pointer"
+                  className="text-[11px] text-purple-700 hover:text-purple-900 font-bold ml-1 cursor-pointer"
                 >
                   Сбросить
                 </button>
               )}
             </div>
 
-            {/* 4 Method Filter Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-4">
-              {(Object.keys(methodDetails) as DiscoveryMethod[]).map((method) => {
-                const info = methodDetails[method];
-                const Icon = info.icon;
-                const count = suspicions.filter((s) => s.discovery_method === method).length;
-                return (
-                  <div
-                    key={method}
-                    onClick={() => setHypoFilterMethod(hypoFilterMethod === method ? 'ALL' : method)}
-                    className={`p-3.5 rounded-xl border transition-all cursor-pointer ${
-                      hypoFilterMethod === method
-                        ? 'border-indigo-600 bg-indigo-50/60 ring-2 ring-indigo-500/20 shadow-xs'
-                        : 'border-slate-200 hover:border-slate-300 bg-slate-50/70'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <Icon className="w-4 h-4 text-indigo-600" />
-                      <span className="text-xs font-bold text-slate-700 bg-white px-2 py-0.5 rounded border border-slate-200">
-                        {count}
-                      </span>
-                    </div>
-                    <div className="text-xs font-bold text-slate-900 mt-2">{info.label}</div>
-                    <div className="text-[11px] text-slate-600 mt-0.5 leading-snug">{info.desc}</div>
-                  </div>
-                );
-              })}
+            {/* Compact Search and Selectors Bar */}
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-2 text-xs">
+              <div className="md:col-span-5 relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  placeholder="Поиск по ключевым словам (огнестойкость, арматура, кабель)..."
+                  value={hypoSearchQuery}
+                  onChange={(e) => setHypoSearchQuery(e.target.value)}
+                  className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:bg-white focus:outline-hidden focus:ring-1 focus:ring-purple-500"
+                />
+              </div>
+
+              <div className="md:col-span-3">
+                <select
+                  value={hypoFilterMethod}
+                  onChange={(e) => setHypoFilterMethod(e.target.value)}
+                  className="w-full py-1.5 px-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-purple-500"
+                >
+                  <option value="ALL">Все методы анализа ({suspicions.length})</option>
+                  <option value="LOGICAL_ANALYSIS">Логический анализ (8)</option>
+                  <option value="SEMANTIC_DISSONANCE">Семантический диссонанс (4)</option>
+                  <option value="NORMATIVE_SEARCH">Нормативный анализ (12)</option>
+                  <option value="HISTORICAL_ML_PATTERN">ML-паттерн-анализ (4)</option>
+                </select>
+              </div>
+
+              <div className="md:col-span-4">
+                <select
+                  value={hypoFilterDiscipline}
+                  onChange={(e) => setHypoFilterDiscipline(e.target.value)}
+                  className="w-full py-1.5 px-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-purple-500"
+                >
+                  <option value="ALL">Все разделы проекта ({suspicions.length})</option>
+                  <option value="АР">АР — Архитектура ({suspicions.filter((s) => s.discipline === 'АР').length})</option>
+                  <option value="КР">КР — Конструкции ({suspicions.filter((s) => s.discipline === 'КР' || s.discipline === 'КМ').length})</option>
+                  <option value="ОВ">ОВ — Отопление и вентиляция ({suspicions.filter((s) => s.discipline === 'ОВ').length})</option>
+                  <option value="ВК">ВК — Водоснабжение ({suspicions.filter((s) => s.discipline === 'ВК').length})</option>
+                  <option value="ЭОМ">ЭОМ — Электроснабжение ({suspicions.filter((s) => s.discipline === 'ЭОМ').length})</option>
+                  <option value="ПЗУ">ПЗУ — Генплан ({suspicions.filter((s) => s.discipline === 'ПЗУ').length})</option>
+                  <option value="СПЗ">СПЗ — Пожаротушение ({suspicions.filter((s) => s.discipline === 'СПЗ').length})</option>
+                  <option value="ТХ">ТХ — Технология ({suspicions.filter((s) => s.discipline === 'ТХ').length})</option>
+                </select>
+              </div>
             </div>
           </div>
 
           {/* List of Suspicions */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-slate-900">
-                Обнаруженные гипотезы и потенциальные коллизии ({filteredSuspicions.length})
-              </h3>
-              <span className="text-xs text-slate-500">
-                Нажмите «+ Добавить в протокол», чтобы привязать замечание к Предписанию
+          <div className="space-y-2">
+            <div className="flex items-center justify-between px-1">
+              <div className="text-xs font-bold text-slate-800">
+                Найдено коллизий: <span className="text-purple-700 font-black">{filteredSuspicions.length}</span>
+                {shouldLimitHypotheses && (
+                  <span className="text-slate-400 font-normal ml-1">
+                    (показано первых 8)
+                  </span>
+                )}
+              </div>
+              <span className="text-[11px] text-slate-500">
+                Нажмите «+ В предписание», чтобы привязать замечание к Шагу 3
               </span>
             </div>
 
-            {filteredSuspicions.map((susp) => {
+            {visibleSuspicions.map((susp) => {
               const isPromoted = susp.inspector_status === 'PROMOTED_TO_CANDIDATE';
               const isDismissed = susp.inspector_status === 'DISMISSED';
 
               return (
                 <div
                   key={susp.suspicion_id}
-                  className={`bg-white rounded-2xl p-5 border transition-all shadow-xs space-y-3 ${
+                  className={`bg-white rounded-xl p-3.5 border transition-all shadow-2xs space-y-2 ${
                     isPromoted
                       ? 'border-emerald-300 bg-emerald-50/20'
                       : isDismissed
                       ? 'border-slate-200 bg-slate-50 opacity-60'
-                      : 'border-slate-200 hover:border-indigo-300'
+                      : 'border-slate-200 hover:border-purple-300'
                   }`}
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center space-x-2">
-                      <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
-                        ИИ уверенность: {Math.round(susp.confidence * 100)}%
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {susp.discipline && (
+                        <span className="px-2 py-0.5 rounded text-[11px] font-black bg-purple-700 text-white shadow-2xs">
+                          {susp.discipline}
+                        </span>
+                      )}
+                      <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-purple-50 text-purple-900 border border-purple-200">
+                        ИИ: {Math.round(susp.confidence * 100)}%
                       </span>
-                      <span className="text-xs font-mono font-bold text-slate-600">
-                        #{susp.suspicion_id}
-                      </span>
-                      <span className="text-xs text-slate-500">•</span>
-                      <span className="text-xs text-slate-700 font-medium">
+                      <span className="text-xs text-slate-700 font-semibold truncate max-w-sm">
                         {susp.normative_base}
                       </span>
                     </div>
 
-                    <div className="flex items-center space-x-2">
+                    <div className="flex items-center space-x-1.5">
+                      <button
+                        onClick={() => setSelectedVisualizerSuspicion(susp)}
+                        className="px-2.5 py-1 bg-slate-100 hover:bg-purple-100 text-purple-900 border border-purple-200 rounded-lg text-xs font-bold transition-colors flex items-center space-x-1.5 cursor-pointer shadow-2xs"
+                        title="Открыть визуализацию чертежа с BBox и калькой наложения"
+                      >
+                        <Scan className="w-3.5 h-3.5 text-purple-700" />
+                        <span>🔍 Чертеж (BBox)</span>
+                      </button>
+
+                      {onNavigateToTab && (
+                        <button
+                          onClick={() => onNavigateToTab('parsing')}
+                          className="px-2 py-1 bg-slate-50 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-lg text-xs font-medium transition-colors flex items-center space-x-1 cursor-pointer"
+                          title="Открыть полный графический анализатор чертежей"
+                        >
+                          <ExternalLink className="w-3 h-3 text-slate-500" />
+                          <span className="hidden sm:inline">Парсер</span>
+                        </button>
+                      )}
+
                       {isPromoted ? (
-                        <span className="px-3 py-1 rounded-lg text-xs font-bold bg-emerald-100 text-emerald-800 flex items-center gap-1 border border-emerald-300">
+                        <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-100 text-emerald-800 flex items-center gap-1 border border-emerald-300">
                           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                          Включено в протокол как замечание
+                          <span>В предписании</span>
                         </span>
                       ) : (
                         <button
                           onClick={() => onPromoteToCandidate && onPromoteToCandidate(susp.suspicion_id)}
-                          className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-colors flex items-center space-x-1.5 cursor-pointer shadow-xs"
+                          className="px-3 py-1 bg-purple-700 hover:bg-purple-800 text-white rounded-lg text-xs font-bold transition-colors flex items-center space-x-1 cursor-pointer shadow-2xs"
                         >
                           <PlusCircle className="w-3.5 h-3.5" />
-                          <span>+ Включить в протокол (CANDIDATE)</span>
+                          <span>+ В предписание</span>
                         </button>
                       )}
                     </div>
                   </div>
 
-                  <div className="text-sm font-bold text-slate-900 leading-snug">
+                  <div className="text-xs font-bold text-slate-900 leading-snug">
                     {susp.description}
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs bg-slate-50 p-3 rounded-xl border border-slate-100">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] bg-slate-50 p-2.5 rounded-lg border border-slate-100">
                     <div>
-                      <span className="text-slate-500 font-bold block text-[11px]">По проекту (ПД):</span>
+                      <span className="font-bold text-blue-700 block text-[10px] uppercase tracking-wider">По проекту (ПД):</span>
                       <span className="text-slate-800 font-medium">{susp.pd_reference}</span>
                     </div>
                     <div>
-                      <span className="text-rose-600 font-bold block text-[11px]">По факту (РД):</span>
+                      <span className="font-bold text-rose-600 block text-[10px] uppercase tracking-wider">По факту (РД):</span>
                       <span className="text-slate-800 font-medium">{susp.rd_reference}</span>
                     </div>
                   </div>
                 </div>
               );
             })}
+
+            {/* Expansion control if there are more than 8 hypotheses */}
+            {filteredSuspicions.length > 8 && (
+              <div className="pt-2 text-center">
+                <button
+                  onClick={() => setShowAllHypotheses(!showAllHypotheses)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-purple-50 text-purple-900 text-xs font-bold rounded-xl border border-slate-200 hover:border-purple-300 transition-all cursor-pointer"
+                >
+                  {showAllHypotheses
+                    ? '▲ Свернуть до 8 основных коллизий'
+                    : `▼ Показать все ${filteredSuspicions.length} коллизий (раскрыть еще ${filteredSuspicions.length - 8})`}
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Stepper Navigation Footer for Step 2 */}
-          <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-3">
+          <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-3">
             <button
               onClick={() => setActiveWorkflowStep(1)}
               className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors flex items-center space-x-1.5 cursor-pointer"
@@ -708,146 +1186,347 @@ export const InspectionWorkspace: React.FC<InspectionWorkspaceProps> = ({
         </div>
       )}
 
-      {/* STEP 3: OFFICIAL PREDPISANIE GENERATION */}
+      {/* STEP 3: OFFICIAL PREDPISANIE OR CLEAN COMPLIANCE ACT */}
       {activeWorkflowStep === 3 && (
         <div className="space-y-4">
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 space-y-5">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-4">
-              <div>
-                <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-rose-100 text-rose-800 text-xs font-bold mb-1.5">
-                  <FileText className="w-3.5 h-3.5 text-rose-700" />
-                  <span>Шаг 3 регламента • Официальный документ государственного строительного надзора</span>
-                </div>
-                <h2 className="text-xl font-black text-slate-900">
-                  Предписание об устранении нарушений при строительстве
-                </h2>
-                <p className="text-xs text-slate-600">
-                  Формируется на основании ст. 52, 54 Градостроительного кодекса РФ и Положения о Мосгосстройнадзоре
-                </p>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => {
-                    setPredpisanieSavedNotice('Предписание успешно сохранено в архив проекта!');
-                    setTimeout(() => setPredpisanieSavedNotice(null), 3500);
-                  }}
-                  className="px-3.5 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl flex items-center space-x-1.5 transition-colors cursor-pointer"
-                >
-                  <Printer className="w-3.5 h-3.5 text-slate-600" />
-                  <span>Печать / Сохранить</span>
-                </button>
-                <button
-                  onClick={onOpenExport}
-                  className="px-3.5 py-2 text-xs font-bold text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-xl flex items-center space-x-1.5 transition-colors cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5 text-purple-600" />
-                  <span>Экспорт PDF</span>
-                </button>
-              </div>
-            </div>
-
-            {predpisanieSavedNotice && (
-              <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-900 text-xs font-bold flex items-center space-x-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                <span>{predpisanieSavedNotice}</span>
-              </div>
-            )}
-
-            {/* Document Header Box */}
-            <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-4 font-serif text-slate-800">
-              <div className="text-center space-y-1">
-                <div className="font-bold text-xs tracking-widest text-slate-600 uppercase">
-                  Правительство Москвы • Мосгосстройнадзор
-                </div>
-                <div className="font-black text-sm text-slate-900 uppercase tracking-wide">
-                  ПРЕДПИСАНИЕ № {predpisanieNumber}
-                </div>
-                <div className="text-xs text-slate-500 font-sans">
-                  г. Москва • Дата оформления: {new Date().toLocaleDateString('ru-RU')}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-sans pt-2 border-t border-slate-200">
+          {/* Case 1: Incomplete package - Block with informative gate */}
+          {!isFullPackage && (
+            <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-6 shadow-sm space-y-4">
+              <div className="flex items-start space-x-3">
+                <AlertTriangle className="w-6 h-6 text-amber-600 shrink-0 mt-0.5" />
                 <div>
-                  <span className="text-slate-500 block">Кому выдано (Генподрядчик):</span>
-                  <strong className="text-slate-900">{currentObject.contractor}</strong>
-                </div>
-                <div>
-                  <span className="text-slate-500 block">Заказчик (Застройщик):</span>
-                  <strong className="text-slate-900">{currentObject.customer}</strong>
-                </div>
-                <div>
-                  <span className="text-slate-500 block">Наименование объекта строительства:</span>
-                  <strong className="text-slate-900">{currentObject.name} ({currentObject.address})</strong>
-                </div>
-                <div>
-                  <span className="text-slate-500 block">Разрешение на строительство:</span>
-                  <strong className="text-slate-900">{currentObject.permit_number}</strong>
+                  <div className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full bg-amber-200 text-amber-900 text-xs font-bold mb-1">
+                    <span>Регламент ст. 54 ГрК РФ • Ожидание полного комплекта документации</span>
+                  </div>
+                  <h2 className="text-lg font-black text-amber-950">
+                    Не все виды строительной документации загружены для оформления заключения
+                  </h2>
+                  <p className="text-xs text-amber-900 mt-1 leading-relaxed max-w-3xl">
+                    По регламенту государственного строительного надзора (ст. 54 ГрК РФ, РД-11-02-2006) 
+                    вынесение официального заключения об отсутствии нарушений («все хорошо») допускается 
+                    <strong> только после сопоставления всех видов строительной документации этапа</strong>: 
+                    утвержденного проекта (ПД), рабочих чертежей со штампом заказчика (РД) и исполнительной документации (ИД с актами АОСР и геодезией).
+                  </p>
                 </div>
               </div>
 
-              {/* Deadline Setting */}
-              <div className="bg-amber-50/80 p-3.5 rounded-xl border border-amber-300 text-xs font-sans flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center space-x-2">
-                  <Clock className="w-4 h-4 text-amber-700" />
-                  <span className="font-bold text-amber-950">
-                    Срок устранения нарушений в соответствии со ст. 54 ГрК РФ:
-                  </span>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+                <div className={`p-3 rounded-xl border ${hasPd ? 'bg-emerald-100/70 border-emerald-300 text-emerald-950' : 'bg-white border-amber-300 text-amber-950'}`}>
+                  <div className="flex items-center justify-between text-xs font-bold">
+                    <span>1. Стадия ПД (Проект)</span>
+                    <span className={hasPd ? 'text-emerald-700' : 'text-amber-700'}>{hasPd ? '✓ Загружена' : '❌ Ожидается'}</span>
+                  </div>
+                  <p className="text-[11px] text-slate-600 mt-1">Шифр проекта, эталон экспертизы</p>
                 </div>
-                <div className="flex items-center space-x-2">
-                  <select
-                    value={predpisanieDays}
-                    onChange={(e) => setPredpisanieDays(Number(e.target.value))}
-                    className="px-2.5 py-1 bg-white border border-amber-300 rounded-lg font-bold text-amber-900 text-xs focus:outline-none"
+
+                <div className={`p-3 rounded-xl border ${hasRd ? 'bg-emerald-100/70 border-emerald-300 text-emerald-950' : 'bg-white border-amber-300 text-amber-950'}`}>
+                  <div className="flex items-center justify-between text-xs font-bold">
+                    <span>2. Стадия РД (Рабочая)</span>
+                    <span className={hasRd ? 'text-emerald-700' : 'text-amber-700'}>{hasRd ? '✓ Загружена' : '❌ Ожидается'}</span>
+                  </div>
+                  <p className="text-[11px] text-slate-600 mt-1">Чертежи «В производство работ»</p>
+                </div>
+
+                <div className={`p-3 rounded-xl border ${hasId ? 'bg-emerald-100/70 border-emerald-300 text-emerald-950' : 'bg-white border-amber-300 text-amber-950'}`}>
+                  <div className="flex items-center justify-between text-xs font-bold">
+                    <span>3. Стадия ИД (Исполнительная)</span>
+                    <span className={hasId ? 'text-emerald-700' : 'text-amber-700'}>{hasId ? '✓ Загружена' : '❌ Ожидается'}</span>
+                  </div>
+                  <p className="text-[11px] text-slate-600 mt-1">Акты АОСР, паспорта качества</p>
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-amber-200 flex flex-wrap items-center justify-between gap-3">
+                <span className="text-xs text-amber-900 font-medium">
+                  Загрузите недостающие виды документации для продолжения:
+                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => setIsQuickUploadModalOpen(true)}
+                    className="px-4 py-2 bg-purple-700 hover:bg-purple-800 text-white rounded-xl text-xs font-bold shadow-xs transition-all flex items-center space-x-1.5 cursor-pointer"
                   >
-                    <option value={15}>15 календарных дней</option>
-                    <option value={30}>30 календарных дней (стандарт)</option>
-                    <option value={45}>45 календарных дней</option>
-                    <option value={60}>60 календарных дней</option>
-                  </select>
-                  <span className="text-amber-800 text-xs font-semibold">
-                    (до{' '}
-                    {new Date(Date.now() + predpisanieDays * 86400000).toLocaleDateString('ru-RU')}
-                    )
-                  </span>
-                </div>
-              </div>
+                    <UploadCloud className="w-3.5 h-3.5" />
+                    <span>+ Дозагрузить любой файл...</span>
+                  </button>
 
-              {/* Table of Confirmed Violations Included in Predpisanie */}
-              <div className="space-y-2 font-sans pt-2">
-                <div className="text-xs font-bold text-slate-800 flex items-center justify-between">
-                  <span>Перечень подтвержденных нарушений для устранения:</span>
-                  <span className="text-purple-700">Всего записей: {protocol.findings.length}</span>
-                </div>
-
-                <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
-                  <table className="w-full text-xs text-left">
-                    <thead className="bg-slate-100 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase">
-                      <tr>
-                        <th className="p-2.5">Код</th>
-                        <th className="p-2.5">Параметр / Дефект</th>
-                        <th className="p-2.5">Требование ПД (Норма)</th>
-                        <th className="p-2.5">Факт в РД (Нарушение)</th>
-                        <th className="p-2.5">Нормативная ссылка</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {protocol.findings.map((f, idx) => (
-                        <tr key={f.id} className="hover:bg-slate-50">
-                          <td className="p-2.5 font-mono font-bold text-purple-700">{f.param_code}</td>
-                          <td className="p-2.5 font-medium text-slate-900">{f.param_name}</td>
-                          <td className="p-2.5 text-slate-600">{f.expected_value}</td>
-                          <td className="p-2.5 text-rose-700 font-bold">{f.actual_value}</td>
-                          <td className="p-2.5 text-slate-500 text-[11px]">{f.normative_reference}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  {onQuickCompletePackage && (
+                    <button
+                      onClick={onQuickCompletePackage}
+                      className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all flex items-center space-x-1.5 cursor-pointer"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>⚡ Загрузить все виды (ПД + РД + ИД) в 1 клик</span>
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
-          </div>
+          )}
+
+          {/* Case 2: Full package & Clean Compliance (0 violations) */}
+          {isFullPackage && isCleanCompliant && (
+            <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-4">
+                <div>
+                  <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold mb-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
+                    <span>Шаг 3 регламента • Официальный Акт проверки соответствия (Без замечаний)</span>
+                  </div>
+                  <h2 className="text-xl font-black text-slate-900">
+                    Акт проверки соответствия объекта капитального строительства
+                  </h2>
+                  <p className="text-xs text-slate-600">
+                    Составлен на основании ст. 54 Градостроительного кодекса РФ. Все виды документации проверены, нарушений не выявлено.
+                  </p>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => {
+                      downloadFullDocumentReport({ object: currentObject, protocol, suspicions });
+                      setPredpisanieSavedNotice('Официальный Акт соответствия без замечаний скачан на ваш компьютер (.html)!');
+                      setTimeout(() => setPredpisanieSavedNotice(null), 3500);
+                    }}
+                    className="px-3.5 py-2 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl flex items-center space-x-1.5 transition-colors cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5 text-emerald-700" />
+                    <span>📥 Скачать официальный Акт (.html)</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setPredpisanieSavedNotice('Акт соответствия успешно зафиксирован в архиве проекта!');
+                      setTimeout(() => setPredpisanieSavedNotice(null), 3500);
+                    }}
+                    className="px-3.5 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl flex items-center space-x-1.5 transition-colors cursor-pointer"
+                  >
+                    <Printer className="w-3.5 h-3.5 text-slate-600" />
+                    <span>Печать / Сохранить</span>
+                  </button>
+                </div>
+              </div>
+
+              {predpisanieSavedNotice && (
+                <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-900 text-xs font-bold flex items-center space-x-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>{predpisanieSavedNotice}</span>
+                </div>
+              )}
+
+              {/* Clean Act Document View Box */}
+              <div className="p-5 rounded-2xl bg-emerald-50/40 border border-emerald-200 space-y-4 font-serif text-slate-800">
+                <div className="text-center space-y-1">
+                  <div className="font-bold text-xs tracking-widest text-slate-600 uppercase">
+                    Правительство Москвы • Комитет государственного строительного надзора
+                  </div>
+                  <div className="font-black text-sm text-slate-900 uppercase tracking-wide">
+                    АКТ ПРОВЕРКИ СООТВЕТСТВИЯ № {predpisanieNumber.replace('ПРЕД', 'АКТ')}/СООТВ-МГСН
+                  </div>
+                  <div className="text-xs text-slate-500 font-sans">
+                    г. Москва • Дата оформления: {new Date().toLocaleDateString('ru-RU')}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-sans pt-2 border-t border-emerald-200">
+                  <div>
+                    <span className="text-slate-500 block">Наименование объекта строительства:</span>
+                    <strong className="text-slate-900">{currentObject.name} ({currentObject.address})</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block">Разрешение на строительство (РНС):</span>
+                    <strong className="text-slate-900">{currentObject.permit_number}</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block">Заказчик (Застройщик):</span>
+                    <strong className="text-slate-900">{currentObject.customer}</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block">Лицо, осуществляющее строительство (Генподрядчик):</span>
+                    <strong className="text-slate-900">{currentObject.contractor}</strong>
+                  </div>
+                </div>
+
+                {/* Verified Construction Documentation Package Box */}
+                <div className="bg-white p-4 rounded-xl border border-emerald-200 text-xs font-sans space-y-2">
+                  <span className="font-bold text-slate-900 block">
+                    1. Сведения о проверенной строительной документации этапа:
+                  </span>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                    <div className="p-2 bg-slate-50 rounded-lg border border-slate-200">
+                      <span className="text-emerald-700 font-bold block">✓ Стадия ПД (Проект)</span>
+                      <span className="text-[11px] text-slate-600">Шифр проекта согласован, эталон Мосгосэкспертизы проверен</span>
+                    </div>
+                    <div className="p-2 bg-slate-50 rounded-lg border border-slate-200">
+                      <span className="text-emerald-700 font-bold block">✓ Стадия РД (Рабочая)</span>
+                      <span className="text-[11px] text-slate-600">Комплект чертежей со штампом заказчика «В производство работ»</span>
+                    </div>
+                    <div className="p-2 bg-slate-50 rounded-lg border border-slate-200">
+                      <span className="text-emerald-700 font-bold block">✓ Стадия ИД (Исполнительная)</span>
+                      <span className="text-[11px] text-slate-600">Реестры актов АОСР, исполнительные геодезические схемы</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Inspector Conclusion Box */}
+                <div className="bg-white p-4 rounded-xl border border-emerald-200 text-xs font-sans space-y-2">
+                  <span className="font-bold text-slate-900 block">
+                    2. Результаты сопоставления и инспекционной проверки:
+                  </span>
+                  <div className="space-y-1.5 text-slate-700">
+                    <p>
+                      • Проведено инспекционное сличение по <strong>Матрице 132 обязательных параметров</strong>, включая пожарную безопасность, несущие конструкции, инженерные сети и доступность МГН.
+                    </p>
+                    <p>
+                      • Отступлений от утвержденной проектной документации и обязательных требований технических регламентов (№ 384-ФЗ), сводов правил (СП) и ГОСТ <strong>НЕ ВЫЯВЛЕНО</strong>.
+                    </p>
+                    <p className="font-bold text-emerald-900 pt-1">
+                      ЗАКЛЮЧЕНИЕ: Объект капитального строительства на проверенном этапе возводится в строгом соответствии с проектной документацией. Оснований для выдачи предписаний не имеется.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Case 3: Full package & Confirmed Violations - Render Official Predpisanie */}
+          {isFullPackage && !isCleanCompliant && (
+            <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-4">
+                <div>
+                  <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-rose-100 text-rose-800 text-xs font-bold mb-1.5">
+                    <FileText className="w-3.5 h-3.5 text-rose-700" />
+                    <span>Шаг 3 регламента • Официальный документ государственного строительного надзора</span>
+                  </div>
+                  <h2 className="text-xl font-black text-slate-900">
+                    Предписание об устранении нарушений при строительстве
+                  </h2>
+                  <p className="text-xs text-slate-600">
+                    Формируется на основании ст. 52, 54 Градостроительного кодекса РФ и Положения о Мосгосстройнадзоре
+                  </p>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => {
+                      setPredpisanieSavedNotice('Предписание успешно сохранено в архив проекта!');
+                      setTimeout(() => setPredpisanieSavedNotice(null), 3500);
+                    }}
+                    className="px-3.5 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl flex items-center space-x-1.5 transition-colors cursor-pointer"
+                  >
+                    <Printer className="w-3.5 h-3.5 text-slate-600" />
+                    <span>Печать / Сохранить</span>
+                  </button>
+                  <button
+                    onClick={onOpenExport}
+                    className="px-3.5 py-2 text-xs font-bold text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-xl flex items-center space-x-1.5 transition-colors cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5 text-purple-600" />
+                    <span>Экспорт PDF</span>
+                  </button>
+                </div>
+              </div>
+
+              {predpisanieSavedNotice && (
+                <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-900 text-xs font-bold flex items-center space-x-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>{predpisanieSavedNotice}</span>
+                </div>
+              )}
+
+              {/* Document Header Box */}
+              <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-4 font-serif text-slate-800">
+                <div className="text-center space-y-1">
+                  <div className="font-bold text-xs tracking-widest text-slate-600 uppercase">
+                    Правительство Москвы • Мосгосстройнадзор
+                  </div>
+                  <div className="font-black text-sm text-slate-900 uppercase tracking-wide">
+                    ПРЕДПИСАНИЕ № {predpisanieNumber}
+                  </div>
+                  <div className="text-xs text-slate-500 font-sans">
+                    г. Москва • Дата оформления: {new Date().toLocaleDateString('ru-RU')}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-sans pt-2 border-t border-slate-200">
+                  <div>
+                    <span className="text-slate-500 block">Кому выдано (Генподрядчик):</span>
+                    <strong className="text-slate-900">{currentObject.contractor}</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block">Заказчик (Застройщик):</span>
+                    <strong className="text-slate-900">{currentObject.customer}</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block">Наименование объекта строительства:</span>
+                    <strong className="text-slate-900">{currentObject.name} ({currentObject.address})</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block">Разрешение на строительство:</span>
+                    <strong className="text-slate-900">{currentObject.permit_number}</strong>
+                  </div>
+                </div>
+
+                {/* Deadline Setting */}
+                <div className="bg-amber-50/80 p-3.5 rounded-xl border border-amber-300 text-xs font-sans flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center space-x-2">
+                    <Clock className="w-4 h-4 text-amber-700" />
+                    <span className="font-bold text-amber-950">
+                      Срок устранения нарушений в соответствии со ст. 54 ГрК РФ:
+                    </span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <select
+                      value={predpisanieDays}
+                      onChange={(e) => setPredpisanieDays(Number(e.target.value))}
+                      className="px-2.5 py-1 bg-white border border-amber-300 rounded-lg font-bold text-amber-900 text-xs focus:outline-none"
+                    >
+                      <option value={15}>15 календарных дней</option>
+                      <option value={30}>30 календарных дней (стандарт)</option>
+                      <option value={45}>45 календарных дней</option>
+                      <option value={60}>60 календарных дней</option>
+                    </select>
+                    <span className="text-amber-800 text-xs font-semibold">
+                      (до{' '}
+                      {new Date(Date.now() + predpisanieDays * 86400000).toLocaleDateString('ru-RU')}
+                      )
+                    </span>
+                  </div>
+                </div>
+
+                {/* Table of Confirmed Violations Included in Predpisanie */}
+                <div className="space-y-2 font-sans pt-2">
+                  <div className="text-xs font-bold text-slate-800 flex items-center justify-between">
+                    <span>Перечень подтвержденных нарушений для устранения:</span>
+                    <span className="text-purple-700">Всего записей: {protocol.findings.length}</span>
+                  </div>
+
+                  <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
+                    <table className="w-full text-xs text-left">
+                      <thead className="bg-slate-100 text-slate-700 border-b border-slate-200 text-[11px] font-bold uppercase">
+                        <tr>
+                          <th className="p-2.5">Код</th>
+                          <th className="p-2.5">Параметр / Дефект</th>
+                          <th className="p-2.5">Требование ПД (Норма)</th>
+                          <th className="p-2.5">Факт в РД (Нарушение)</th>
+                          <th className="p-2.5">Нормативная ссылка</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {protocol.findings.map((f, idx) => (
+                          <tr key={f.id} className="hover:bg-slate-50">
+                            <td className="p-2.5 font-mono font-bold text-purple-700">{f.param_code}</td>
+                            <td className="p-2.5 font-medium text-slate-900">{f.param_name}</td>
+                            <td className="p-2.5 text-slate-600">{f.expected_value}</td>
+                            <td className="p-2.5 text-rose-700 font-bold">{f.actual_value}</td>
+                            <td className="p-2.5 text-slate-500 text-[11px]">{f.normative_reference}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Stepper Navigation Footer for Step 3 */}
           <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-3">
@@ -861,9 +1540,18 @@ export const InspectionWorkspace: React.FC<InspectionWorkspaceProps> = ({
 
             <button
               onClick={() => setActiveWorkflowStep(4)}
-              className="px-4 py-2 bg-purple-700 hover:bg-purple-800 text-white rounded-xl text-xs font-bold transition-colors flex items-center space-x-1.5 cursor-pointer shadow-xs"
+              disabled={!isFullPackage}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors flex items-center space-x-1.5 shadow-xs ${
+                isFullPackage
+                  ? 'bg-purple-700 hover:bg-purple-800 text-white cursor-pointer'
+                  : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+              }`}
             >
-              <span>Утвердить Предписание и перейти к Шагу 4: Подписание с УКЭП →</span>
+              <span>
+                {isCleanCompliant
+                  ? 'Утвердить Акт соответствия и перейти к Шагу 4: Подписание с УКЭП →'
+                  : 'Утвердить Предписание и перейти к Шагу 4: Подписание с УКЭП →'}
+              </span>
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -1225,107 +1913,18 @@ export const InspectionWorkspace: React.FC<InspectionWorkspaceProps> = ({
         </div>
       )}
 
-      {/* Modal: Create Hypothesis Manually */}
-      {isCreateHypoModalOpen && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <form
-            onSubmit={handleCreateHypoSubmit}
-            className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4"
-          >
-            <div className="flex items-center justify-between border-b pb-3">
-              <h4 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-indigo-600" />
-                <span>Формирование инженерной гипотезы ИИ вручную</span>
-              </h4>
-              <button
-                type="button"
-                onClick={() => setIsCreateHypoModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Метод выявления:</label>
-                <select
-                  value={newHypoMethod}
-                  onChange={(e) => setNewHypoMethod(e.target.value as DiscoveryMethod)}
-                  className="w-full p-2 border border-slate-300 rounded-lg bg-slate-50 font-medium"
-                >
-                  <option value="LOGICAL_ANALYSIS">Логический анализ связок</option>
-                  <option value="SEMANTIC_DISSONANCE">Семантический диссонанс</option>
-                  <option value="NORMATIVE_ANALYSIS">Нормативный анализ (СП, ГОСТ)</option>
-                  <option value="ML_PATTERN_ANALYSIS">ML-паттерн-анализ</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Суть гипотезы / коллизии:</label>
-                <textarea
-                  value={newHypoDesc}
-                  onChange={(e) => setNewHypoDesc(e.target.value)}
-                  placeholder="Опишите предполагаемое расхождение..."
-                  required
-                  rows={3}
-                  className="w-full p-2.5 border border-slate-300 rounded-lg"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Требование ПД:</label>
-                  <input
-                    type="text"
-                    value={newHypoPd}
-                    onChange={(e) => setNewHypoPd(e.target.value)}
-                    placeholder="ПД: раздел АР..."
-                    className="w-full p-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Факт РД:</label>
-                  <input
-                    type="text"
-                    value={newHypoRd}
-                    onChange={(e) => setNewHypoRd(e.target.value)}
-                    placeholder="РД: лист 12..."
-                    className="w-full p-2 border border-slate-300 rounded-lg"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Нормативная база:</label>
-                <input
-                  type="text"
-                  value={newHypoNorm}
-                  onChange={(e) => setNewHypoNorm(e.target.value)}
-                  placeholder="СП 59.13330.2020 / СП 16.13330..."
-                  className="w-full p-2 border border-slate-300 rounded-lg"
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end space-x-2 pt-2 border-t">
-              <button
-                type="button"
-                onClick={() => setIsCreateHypoModalOpen(false)}
-                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
-              >
-                Отмена
-              </button>
-              <button
-                type="submit"
-                className="px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl cursor-pointer"
-              >
-                Создать гипотезу
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
+      {/* Modal: Create Hypothesis with TZ Builder and Formulation Guide */}
+      <HypothesisTZBuilderModal
+        isOpen={isCreateHypoModalOpen}
+        onClose={() => setIsCreateHypoModalOpen(false)}
+        onAddHypothesis={(newHypo) => {
+          if (onAddNewHypothesis) {
+            onAddNewHypothesis(newHypo);
+          }
+        }}
+        objectId={currentObject.id}
+        objectName={currentObject.name}
+      />
 
       {/* Modal: Supervisor Unlock */}
       {isCancelModalOpen && (
@@ -1374,6 +1973,391 @@ export const InspectionWorkspace: React.FC<InspectionWorkspaceProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Modal: Quick Versatile File & Stage Documentation Upload */}
+      {isQuickUploadModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 space-y-5 my-8">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-9 h-9 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center">
+                  <UploadCloud className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900">
+                    Дозагрузка файлов и документации объекта
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    {currentObject.name}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsQuickUploadModalOpen(false)}
+                className="w-8 h-8 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 flex items-center justify-center cursor-pointer transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Stage Completeness Bar */}
+            <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-bold text-slate-700">Комплектность видов документации этапа:</span>
+                <span className={`font-black px-2 py-0.5 rounded-full text-[10px] ${
+                  isFullPackage ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                }`}>
+                  {isFullPackage ? '✓ Полный комплект (ПД + РД + ИД)' : '⚠️ Комплект не полон'}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                <div className={`p-2 rounded-xl border font-bold ${
+                  hasPd ? 'bg-emerald-50 border-emerald-300 text-emerald-900' : 'bg-white border-amber-300 text-amber-900'
+                }`}>
+                  <div>Стадия ПД</div>
+                  <div className="text-[10px] font-normal">{hasPd ? '✓ Загружена' : 'Ожидается'}</div>
+                </div>
+                <div className={`p-2 rounded-xl border font-bold ${
+                  hasRd ? 'bg-emerald-50 border-emerald-300 text-emerald-900' : 'bg-white border-amber-300 text-amber-900'
+                }`}>
+                  <div>Стадия РД</div>
+                  <div className="text-[10px] font-normal">{hasRd ? '✓ Загружена' : 'Ожидается'}</div>
+                </div>
+                <div className={`p-2 rounded-xl border font-bold ${
+                  hasId ? 'bg-emerald-50 border-emerald-300 text-emerald-900' : 'bg-white border-amber-300 text-amber-900'
+                }`}>
+                  <div>Стадия ИД</div>
+                  <div className="text-[10px] font-normal">{hasId ? '✓ Загружена' : 'Ожидается'}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Storage Memory Limit Bar */}
+            {(() => {
+              const currentTotalMb = (uploadedFilesList || []).reduce((acc, f) => acc + (f.sizeMb || 0), 0);
+              const maxStorageMb = 200;
+              const remainingMb = Math.max(0, +(maxStorageMb - currentTotalMb).toFixed(1));
+              const pct = Math.min(100, (currentTotalMb / maxStorageMb) * 100);
+              return (
+                <div className="p-2.5 rounded-xl bg-purple-50/50 border border-purple-200/60 space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center space-x-1.5 font-bold text-slate-700">
+                      <HardDrive className="w-3.5 h-3.5 text-purple-600" />
+                      <span>Память хранилища проекта:</span>
+                    </div>
+                    <span className="text-[11px] font-bold text-emerald-700">
+                      Осталось памяти: {remainingMb} МБ из {maxStorageMb} МБ
+                    </span>
+                  </div>
+                  <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-purple-500 to-indigo-600 rounded-full transition-all"
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Stage Selector Chips for Upload */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-700 block">
+                К какой стадии привязать загружаемый файл:
+              </label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {[
+                  { id: 'AUTO', label: 'Авто (по имени)' },
+                  { id: 'PD', label: 'Стадия ПД (Проект)' },
+                  { id: 'RD', label: 'Стадия РД (Рабочая)' },
+                  { id: 'ID', label: 'Стадия ИД (Исполн.)' },
+                ].map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setQuickUploadStage(item.id as any)}
+                    className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer text-center ${
+                      quickUploadStage === item.id
+                        ? 'bg-purple-600 text-white border-purple-700 shadow-xs'
+                        : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* List of currently loaded files with delete option */}
+            {uploadedFilesList && uploadedFilesList.length > 0 && (
+              <div className="space-y-1.5 pt-1">
+                <div className="flex items-center justify-between text-xs font-bold text-slate-700">
+                  <span>Загруженные документы в проекте ({uploadedFilesList.length}):</span>
+                  <span className="text-[11px] text-slate-500 font-normal">
+                    Нажмите корзину для удаления любого документа
+                  </span>
+                </div>
+                <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1">
+                  {uploadedFilesList.map((file, idx) => {
+                    const isPd = file.stage === 'PD';
+                    const isRd = file.stage === 'RD';
+                    return (
+                      <div
+                        key={file.id || `uploaded-file-${idx}`}
+                        className={`p-2 rounded-xl border text-xs flex items-center justify-between gap-2 ${
+                          isPd
+                            ? 'bg-blue-50/50 border-blue-200'
+                            : isRd
+                            ? 'bg-purple-50/50 border-purple-200'
+                            : 'bg-emerald-50/50 border-emerald-200'
+                        }`}
+                      >
+                        <div className="flex items-center space-x-2 min-w-0">
+                          <span
+                            className={`px-1.5 py-0.2 rounded text-[9px] font-black uppercase shrink-0 ${
+                              isPd ? 'bg-blue-600 text-white' : isRd ? 'bg-purple-600 text-white' : 'bg-emerald-600 text-white'
+                            }`}
+                          >
+                            {file.stage || 'РД'}
+                          </span>
+                          <span className="font-bold text-slate-800 truncate max-w-[280px]" title={file.name}>
+                            {file.name}
+                          </span>
+                          <span className="text-slate-400 text-[10px] shrink-0">
+                            {file.sizeMb} МБ
+                          </span>
+                        </div>
+
+                        {(onDeleteUploadedPdf || onSelectUploadedPdf) && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              if (onDeleteUploadedPdf) {
+                                onDeleteUploadedPdf(file.id);
+                              } else if (onSelectUploadedPdf) {
+                                const remaining = uploadedFilesList.filter((f) => f.id !== file.id);
+                                if (remaining.length > 0) {
+                                  onSelectUploadedPdf(remaining[0].id);
+                                }
+                              }
+                              setReportDownloadToast(`Документ «${file.name}» удален.`);
+                              setTimeout(() => setReportDownloadToast(null), 3000);
+                            }}
+                            className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 p-1.5 rounded-lg cursor-pointer transition-colors shrink-0"
+                            title="Удалить файл из проекта"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Direct File Drag & Drop Dropzone */}
+            <div
+              onClick={() => directFileInputRef.current?.click()}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                const droppedFiles = e.dataTransfer.files;
+                if (droppedFiles && droppedFiles.length > 0 && onUploadNewPdfFile) {
+                  const file = droppedFiles[0];
+                  const stage =
+                    quickUploadStage === 'AUTO'
+                      ? file.name.toUpperCase().includes('ПД')
+                        ? 'PD'
+                        : file.name.toUpperCase().includes('ИД')
+                        ? 'ID'
+                        : 'RD'
+                      : quickUploadStage;
+                  onUploadNewPdfFile(file, stage);
+                  if (onQuickAddStage) onQuickAddStage(stage);
+                  setReportDownloadToast(`Файл «${file.name}» успешно загружен (Стадия ${stage})!`);
+                  setTimeout(() => setReportDownloadToast(null), 3500);
+                  setIsQuickUploadModalOpen(false);
+                }
+              }}
+              className="border-2 border-dashed border-purple-300 hover:border-purple-500 bg-purple-50/40 hover:bg-purple-50/80 rounded-2xl p-6 text-center cursor-pointer transition-all space-y-2 group"
+            >
+              <input
+                ref={directFileInputRef}
+                type="file"
+                className="hidden"
+                accept=".pdf,.dwg,.dxf,.png,.jpg,.jpeg,.zip"
+                onChange={(e) => {
+                  const selected = e.target.files;
+                  if (selected && selected.length > 0 && onUploadNewPdfFile) {
+                    const file = selected[0];
+                    const stage =
+                      quickUploadStage === 'AUTO'
+                        ? file.name.toUpperCase().includes('ПД')
+                          ? 'PD'
+                          : file.name.toUpperCase().includes('ИД')
+                          ? 'ID'
+                          : 'RD'
+                        : quickUploadStage;
+                    onUploadNewPdfFile(file, stage);
+                    if (onQuickAddStage) onQuickAddStage(stage);
+                    setReportDownloadToast(`Файл «${file.name}» успешно загружен (Стадия ${stage})!`);
+                    setTimeout(() => setReportDownloadToast(null), 3500);
+                    setIsQuickUploadModalOpen(false);
+                  }
+                }}
+              />
+              <div className="w-12 h-12 rounded-2xl bg-white shadow-xs text-purple-600 flex items-center justify-center mx-auto group-hover:scale-110 transition-transform">
+                <UploadCloud className="w-6 h-6" />
+              </div>
+              <div className="text-xs font-bold text-slate-800">
+                Нажмите для выбора любого файла или перетащите его сюда
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Поддерживаются любые файлы: .PDF, .DWG, .DXF, .PNG, .JPG, .ZIP (до 100 МБ)
+              </p>
+            </div>
+
+            {/* Quick 1-click stage fillers */}
+            <div className="space-y-2 pt-2 border-t border-slate-100">
+              <span className="text-xs font-bold text-slate-700 block">
+                Или добавьте недостающие виды документации в 1 клик:
+              </span>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onQuickAddStage) onQuickAddStage('PD');
+                    setReportDownloadToast('Комплект проектной документации (ПД) успешно прикреплен!');
+                    setTimeout(() => setReportDownloadToast(null), 3500);
+                  }}
+                  className={`p-2.5 rounded-xl border text-left text-xs transition-all cursor-pointer ${
+                    hasPd
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                      : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-800'
+                  }`}
+                >
+                  <div className="font-bold flex items-center justify-between">
+                    <span>+ Стадия ПД</span>
+                    {hasPd && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />}
+                  </div>
+                  <div className="text-[10px] text-slate-500 mt-0.5">Утвержденный проект</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onQuickAddStage) onQuickAddStage('RD');
+                    setReportDownloadToast('Комплект рабочей документации (РД) успешно прикреплен!');
+                    setTimeout(() => setReportDownloadToast(null), 3500);
+                  }}
+                  className={`p-2.5 rounded-xl border text-left text-xs transition-all cursor-pointer ${
+                    hasRd
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                      : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-800'
+                  }`}
+                >
+                  <div className="font-bold flex items-center justify-between">
+                    <span>+ Стадия РД</span>
+                    {hasRd && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />}
+                  </div>
+                  <div className="text-[10px] text-slate-500 mt-0.5">Чертежи в работу</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onQuickAddStage) onQuickAddStage('ID');
+                    setReportDownloadToast('Комплект исполнительной документации (ИД) успешно прикреплен!');
+                    setTimeout(() => setReportDownloadToast(null), 3500);
+                  }}
+                  className={`p-2.5 rounded-xl border text-left text-xs transition-all cursor-pointer ${
+                    hasId
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                      : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-800'
+                  }`}
+                >
+                  <div className="font-bold flex items-center justify-between">
+                    <span>+ Стадия ИД</span>
+                    {hasId && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />}
+                  </div>
+                  <div className="text-[10px] text-slate-500 mt-0.5">Акты АОСР, схемы</div>
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100">
+              {onQuickCompletePackage && !isFullPackage ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onQuickCompletePackage();
+                    setReportDownloadToast('Все обязательные виды документации (ПД + РД + ИД) загружены!');
+                    setTimeout(() => setReportDownloadToast(null), 3500);
+                    setIsQuickUploadModalOpen(false);
+                  }}
+                  className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center space-x-1.5 cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>⚡ Загрузить все стадии (ПД+РД+ИД) в 1 клик</span>
+                </button>
+              ) : (
+                <div />
+              )}
+              <button
+                type="button"
+                onClick={() => setIsQuickUploadModalOpen(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer"
+              >
+                Закрыть
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* FLOATING TOAST NOTIFICATION */}
+      {reportDownloadToast && (
+        <div className="fixed bottom-6 right-6 z-50 animate-bounce">
+          <div className="bg-emerald-600 text-white px-5 py-3 rounded-2xl shadow-2xl border border-white/20 flex items-center space-x-3 text-xs font-bold">
+            <CheckCircle2 className="w-5 h-5 text-white shrink-0" />
+            <span>{reportDownloadToast}</span>
+          </div>
+        </div>
+      )}
+
+      {/* DOCUMENT AUDIT & VERIFICATION MODAL */}
+      <DocumentAuditModal
+        isOpen={isAuditModalOpen}
+        onClose={() => setIsAuditModalOpen(false)}
+        object={currentObject}
+        protocol={protocol}
+        suspicions={suspicions}
+        onSelectFindingForInspection={(findingId) => {
+          setSelectedFindingId(findingId);
+          setActiveWorkflowStep(1);
+        }}
+      />
+
+      {/* DRAWING COMPUTER VISION BBOX & OVERLAY VISUALIZER MODAL */}
+      {selectedVisualizerSuspicion && (
+        <DrawingCollisionVisualizerModal
+          suspicion={selectedVisualizerSuspicion}
+          onClose={() => setSelectedVisualizerSuspicion(null)}
+          onPromoteToCandidate={(id) => {
+            if (onPromoteToCandidate) {
+              onPromoteToCandidate(id);
+            }
+          }}
+          onNavigateToParserTab={() => {
+            if (onNavigateToTab) {
+              onNavigateToTab('parsing');
+            }
+          }}
+        />
       )}
     </div>
   );

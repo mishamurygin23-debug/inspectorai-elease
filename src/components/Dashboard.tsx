@@ -19,7 +19,9 @@ import {
   Split,
   FileCheck2
 } from 'lucide-react';
-import { ConstructionObject, UploadScenario } from '../types';
+import { ConstructionObject, UploadScenario, UserRole } from '../types';
+import { ROLE_PROFILES } from '../data/rolesData';
+import { KeyRound, Sparkles, UserCheck, Lock, Cpu, UserPlus } from 'lucide-react';
 
 interface DashboardProps {
   objects: ConstructionObject[];
@@ -31,6 +33,8 @@ interface DashboardProps {
   onOpenCreateObject: () => void;
   onOpenUploadForObject: (obj: ConstructionObject) => void;
   onToggleVerifiedAndSent?: (objectId: string) => void;
+  currentRole?: UserRole;
+  onOpenAuth?: () => void;
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({
@@ -43,6 +47,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onOpenCreateObject,
   onOpenUploadForObject,
   onToggleVerifiedAndSent,
+  currentRole = 'INSPECTOR',
+  onOpenAuth,
 }) => {
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [filterScenario, setFilterScenario] = useState<string>('ALL');
@@ -112,82 +118,103 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
+  const currentProfile = ROLE_PROFILES[currentRole] || ROLE_PROFILES.INSPECTOR;
+
   return (
     <div className="space-y-6">
-      {/* Top Banner with Moscow Supervision highlights and Create Object action */}
-      <div className="bg-gradient-to-r from-purple-950 via-indigo-950 to-slate-900 rounded-2xl p-6 text-white shadow-xl border border-purple-800/50">
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-          <div>
-            <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-purple-800/60 border border-purple-600/40 text-xs text-purple-200 font-medium mb-3">
-              <ShieldCheck className="w-3.5 h-3.5 text-purple-300" />
-              <span>Единый контур строительного надзора г. Москвы • Матрица 132 параметров</span>
+      {/* Top Banner with Moscow Supervision highlights and Workflow Actions */}
+      <div className="bg-slate-900 rounded-2xl p-6 text-white shadow-xl border border-slate-800">
+        <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-5">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-md bg-purple-900/60 border border-purple-700/50 text-[11px] font-semibold text-purple-200">
+                <ShieldCheck className="w-3.5 h-3.5 text-purple-300" />
+                <span>Мосгосстройнадзор • 132 параметра контроля</span>
+              </span>
+
+              {/* Active user persona pill */}
+              <div className="inline-flex items-center space-x-2 px-2.5 py-0.5 rounded-md bg-slate-800 border border-slate-700 text-[11px] text-slate-200">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                <span>Сотрудник: <strong>{currentProfile.fullName}</strong></span>
+                {onOpenAuth && (
+                  <button
+                    onClick={onOpenAuth}
+                    className="text-purple-300 hover:text-white underline cursor-pointer ml-1 font-semibold"
+                  >
+                    Сменить
+                  </button>
+                )}
+              </div>
             </div>
-            <h2 className="text-2xl font-black tracking-tight text-white">
-              Дашборд объектов государственного строительного надзора
+
+            <h2 className="text-xl sm:text-2xl font-black tracking-tight text-white">
+              Дашборд объектов надзора г. Москвы
             </h2>
-            <p className="text-sm text-purple-200/90 mt-1 max-w-3xl">
-              1. Создайте новый объект надзора → 2. Загрузите файлы ПД и РД → 3. Запустите автоматическую сверку 132 параметров с выделением расхождений <strong>КРАСНЫМ цветом</strong>.
+            <p className="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed">
+              Автоматическая кросс-верификация проектной (ПД) и рабочей (РД) документации со штампом «В производство работ».
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-            {/* Step 1: Create Object Button */}
+          {/* Workflow primary action buttons */}
+          <div className="flex items-center gap-3 shrink-0">
             <button
+              type="button"
               onClick={onOpenCreateObject}
-              className="px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-sm font-bold rounded-xl shadow-lg transition-all flex items-center space-x-2 cursor-pointer ring-2 ring-emerald-400/40"
-              title="Создать и зарегистрировать новый объект строительства в контуре надзора"
+              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs sm:text-sm font-bold rounded-xl shadow-md transition-all flex items-center space-x-2 cursor-pointer border border-emerald-400/40"
+              title="Зарегистрировать новый объект строительства"
             >
               <Plus className="w-4 h-4" />
-              <span>1. Создать новый объект</span>
+              <span>Создать объект</span>
             </button>
 
-            {/* Step 2: Upload Files Button */}
             <button
+              type="button"
               onClick={onOpenUpload}
-              className="px-4 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-sm font-semibold rounded-xl shadow-lg transition-all flex items-center space-x-2 cursor-pointer"
+              className="px-4 py-2.5 bg-purple-600 hover:bg-purple-500 text-white text-xs sm:text-sm font-bold rounded-xl shadow-md transition-all flex items-center space-x-2 cursor-pointer border border-purple-400/30"
+              title="Загрузить чертежи и тома документации"
             >
               <UploadCloud className="w-4 h-4" />
-              <span>2. Загрузить файлы</span>
+              <span>Загрузить файлы</span>
             </button>
           </div>
         </div>
 
         {/* 4 Summary Stats Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5 mt-6 pt-5 border-t border-purple-800/40">
-          <div className="bg-purple-950/50 backdrop-blur rounded-xl p-3.5 border border-purple-700/40">
-            <div className="text-xs text-purple-300 font-medium flex items-center justify-between">
-              <span>Подтвержденных нарушений</span>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5 mt-6 pt-5 border-t border-slate-800">
+          <div className="bg-slate-800/80 rounded-xl p-3.5 border border-slate-700/80">
+            <div className="text-xs text-slate-400 font-medium flex items-center justify-between">
+              <span>Подтвержденные</span>
               <AlertTriangle className="w-4 h-4 text-rose-400" />
             </div>
             <div className="text-2xl font-black text-rose-400 mt-1">{totalViolations}</div>
-            <div className="text-[11px] text-purple-300/80 mt-0.5">Включены в GOLD-набор</div>
+            <div className="text-[11px] text-slate-400 mt-0.5">В GOLD-наборе</div>
           </div>
 
-          <div className="bg-purple-950/50 backdrop-blur rounded-xl p-3.5 border border-purple-700/40">
-            <div className="text-xs text-purple-300 font-medium flex items-center justify-between">
-              <span>Кандидатов на проверку</span>
+          <div className="bg-slate-800/80 rounded-xl p-3.5 border border-slate-700/80">
+            <div className="text-xs text-slate-400 font-medium flex items-center justify-between">
+              <span>Кандидаты</span>
               <Clock className="w-4 h-4 text-amber-400" />
             </div>
             <div className="text-2xl font-black text-amber-400 mt-1">{totalCandidates}</div>
-            <div className="text-[11px] text-purple-300/80 mt-0.5">Требуют решения инспектора</div>
+            <div className="text-[11px] text-slate-400 mt-0.5">Требуют решения</div>
           </div>
 
-          <div className="bg-purple-950/50 backdrop-blur rounded-xl p-3.5 border border-purple-700/40">
-            <div className="text-xs text-purple-300 font-medium flex items-center justify-between">
-              <span>Отрицательных эталонов</span>
+          <div className="bg-slate-800/80 rounded-xl p-3.5 border border-slate-700/80">
+            <div className="text-xs text-slate-400 font-medium flex items-center justify-between">
+              <span>Эталоны нормы</span>
               <CheckCircle2 className="w-4 h-4 text-emerald-400" />
             </div>
             <div className="text-2xl font-black text-emerald-400 mt-1">{totalVerifiedNeg}</div>
-            <div className="text-[11px] text-purple-300/80 mt-0.5">NEGATIVE_VERIFIED (FPR &lt; 5%)</div>
+            <div className="text-[11px] text-slate-400 mt-0.5">FPR &lt; 5%</div>
           </div>
 
-          <div className="bg-purple-950/50 backdrop-blur rounded-xl p-3.5 border border-purple-700/40">
-            <div className="text-xs text-purple-300 font-medium flex items-center justify-between">
-              <span>Гипотез свободного поиска</span>
+          <div className="bg-slate-800/80 rounded-xl p-3.5 border border-slate-700/80">
+            <div className="text-xs text-slate-400 font-medium flex items-center justify-between">
+              <span>Гипотезы ИИ</span>
               <Building2 className="w-4 h-4 text-indigo-400" />
             </div>
             <div className="text-2xl font-black text-indigo-400 mt-1">{totalSuspicions}</div>
-            <div className="text-[11px] text-purple-300/80 mt-0.5">Вне Матрицы (SUSPICION)</div>
+            <div className="text-[11px] text-slate-400 mt-0.5">Свободный поиск</div>
           </div>
         </div>
       </div>

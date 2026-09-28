@@ -1,8 +1,16 @@
-ВКР РР/mri_dataset.npz
 *.pth
 node_modules/
 dist/
 .idea/
+.vscode/
+.agent/
+.agents/
+.ai/
+.claude/
+.cursor/
+.sourcecraft/
+__pycache__/
+*.pyc
 .env
 .env.local
 .DS_Store

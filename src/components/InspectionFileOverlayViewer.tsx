@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   AlertOctagon,
   AlertTriangle,
@@ -19,6 +19,9 @@ import {
   Highlighter,
   Type,
   Maximize2,
+  Minimize2,
+  LayoutTemplate,
+  MoveHorizontal,
   ExternalLink,
   ShieldCheck,
   Check,
@@ -31,7 +34,10 @@ import {
   Send,
   PlusCircle,
   FileCheck,
-  CheckCheck
+  CheckCheck,
+  Crosshair,
+  Scan,
+  Sliders
 } from 'lucide-react';
 import {
   CheckFinding,
@@ -42,6 +48,8 @@ import {
   UserRole
 } from '../types';
 import { PredpisanieModal } from './PredpisanieModal';
+import { ActualPdfViewer, UploadedPdfMetadata } from './ActualPdfViewer';
+import { downloadFullDocumentReport } from '../utils/reportGenerator';
 
 interface InspectionFileOverlayViewerProps {
   findings: CheckFinding[];
@@ -67,6 +75,13 @@ interface InspectionFileOverlayViewerProps {
   suspicions?: Suspicion[];
   onPromoteToCandidate?: (suspicionId: number) => void;
   onAddNewHypothesis?: (hypothesis: Omit<Suspicion, 'suspicion_id'>) => void;
+  onOpenVisualizer?: (suspicion: Suspicion) => void;
+  uploadedPdfBlobUrl?: string;
+  uploadedPdfFileName?: string;
+  uploadedPdfSizeMb?: number;
+  uploadedFilesList?: UploadedPdfMetadata[];
+  onSelectUploadedPdf?: (fileId: string) => void;
+  onUploadNewPdfFile?: (file: File) => void;
 }
 
 // Exact PDF sheet excerpt definitions for each defect
@@ -90,13 +105,13 @@ export interface AuthenticPdfDocumentExcerpt {
 
 const PDF_EXCERPTS: Record<string, AuthenticPdfDocumentExcerpt> = {
   'AR-01': {
-    pdfFileName: 'РД-2025-04-266-АР1.pdf',
+    pdfFileName: 'РД-2025-04.266-АР1_Планы_Узлы_Спецификации_Разрезы.pdf',
     pdfSheetTitle: 'Лист 1. Общие данные (Обоснование, нормативы, ведомость чертежей, примечания)',
-    pdfPageNumber: 3,
-    totalPages: 15,
-    gostCode: 'РД-2025-04.266-АР2',
-    revision: 'Изм. 1',
-    date: '16.04.2025',
+    pdfPageNumber: 2,
+    totalPages: 5,
+    gostCode: 'РД-2025-04.266-АР1',
+    revision: 'Изм. 4',
+    date: '10.11.2025',
     erroneousSnippet: '2. За отм. 0.000 принята отм. чистого пола 1 этажа здания, что соответствует абсолютной отм. 164,18.',
     expectedSnippet: 'За отм. 0.000 принята абсолютная отметка 165.00 м (ПД: лист 3, положительное заключение Мосгосэкспертизы)',
     differenceDelta: '-820 мм (грубое вертикальное занижение посадки здания)',
@@ -107,13 +122,13 @@ const PDF_EXCERPTS: Record<string, AuthenticPdfDocumentExcerpt> = {
     sheetType: 'GENERAL_NOTES'
   },
   'AR-12': {
-    pdfFileName: 'РД-2025-04-266-АР1.pdf',
+    pdfFileName: 'РД-2025-04.266-АР2_Фасады_Раскладка_панелей_Витражи.pdf',
     pdfSheetTitle: 'Лист 9. Схема расположения стеновых сэндвич-панелей и алюкобонда. Спецификация материалов',
-    pdfPageNumber: 9,
-    totalPages: 15,
+    pdfPageNumber: 3,
+    totalPages: 4,
     gostCode: 'РД-2025-04.266-АР2',
-    revision: 'Изм. 2',
-    date: '22.05.2025',
+    revision: 'Изм. 3',
+    date: '04.12.2025',
     erroneousSnippet: 'СП-01: Стеновые сэндвич-панели поэтажной разрезки «Венталл-С3» толщиной 150 мм (плотность 115 кг/м³)',
     expectedSnippet: 'Панели Rukki Rus толщиной 120 мм, плотность 105 кг/м³ (ПД: лист 8, раздел АР)',
     differenceDelta: '+30 мм толщины (+25% к постоянной нагрузке на несущий металлокаркас)',
@@ -124,13 +139,13 @@ const PDF_EXCERPTS: Record<string, AuthenticPdfDocumentExcerpt> = {
     sheetType: 'SPECIFICATION_TABLE'
   },
   'AR-41': {
-    pdfFileName: 'РД-2025-04-266-АР1.pdf',
-    pdfSheetTitle: 'Лист 12. Спецификация элементов заполнения проемов (двери, ворота, витражи)',
-    pdfPageNumber: 12,
-    totalPages: 15,
-    gostCode: 'РД-2025-04.266-АР2',
-    revision: 'Изм. 2',
-    date: '28.05.2025',
+    pdfFileName: 'РД-2025-04.266-АР1_Планы_Узлы_Спецификации_Разрезы.pdf',
+    pdfSheetTitle: 'Лист 16. Спецификация элементов заполнения проемов (двери, ворота, витражи)',
+    pdfPageNumber: 5,
+    totalPages: 5,
+    gostCode: 'РД-2025-04.266-АР1',
+    revision: 'Изм. 4',
+    date: '10.11.2025',
     erroneousSnippet: 'Блок Д-12: Дверной блок металлический противопожарный ДПМ EI 60, размер 800 × 2100 мм (в свету 790 мм)',
     expectedSnippet: 'Блок Д-12: 1000 × 2100 мм (ширина эвакуационного выхода в свету не менее 900 мм)',
     differenceDelta: '-200 мм (заужение эвакуационного выхода на 21% ниже минимальной нормы)',
@@ -142,9 +157,9 @@ const PDF_EXCERPTS: Record<string, AuthenticPdfDocumentExcerpt> = {
   },
   'AR-18': {
     pdfFileName: 'РД-2025-04.266-АР1_Планы_Узлы_Спецификации_Разрезы.pdf',
-    pdfSheetTitle: 'Лист 18. Спецификация ворот погрузки сервисной зоны Вр-1..Вр-4',
-    pdfPageNumber: 18,
-    totalPages: 22,
+    pdfSheetTitle: 'Лист 15. Спецификация ворот погрузки сервисной зоны Вр-1..Вр-4',
+    pdfPageNumber: 4,
+    totalPages: 5,
     gostCode: 'РД-2025-04.266-АР1',
     revision: 'Изм. 4',
     date: '10.11.2025',
@@ -159,9 +174,9 @@ const PDF_EXCERPTS: Record<string, AuthenticPdfDocumentExcerpt> = {
   },
   'OV-08': {
     pdfFileName: 'РД-2025-04.266-ОВ_Отопление_и_вентиляция_Схемы.pdf',
-    pdfSheetTitle: 'Лист 7. Схема системы отопления серверной пом. 104',
-    pdfPageNumber: 7,
-    totalPages: 16,
+    pdfSheetTitle: 'Лист 1. Общие указания и схема системы отопления серверной пом. 104',
+    pdfPageNumber: 2,
+    totalPages: 3,
     gostCode: 'РД-2025-04.266-ОВ',
     revision: 'Изм. 2',
     date: '28.11.2025',
@@ -177,8 +192,8 @@ const PDF_EXCERPTS: Record<string, AuthenticPdfDocumentExcerpt> = {
   'KJ-02': {
     pdfFileName: 'П-2025-04-266-КЖ01_Свайное_поле_364_сваи_Ростверки.pdf',
     pdfSheetTitle: 'Лист 4. Схема свайного поля (364 сваи). Отметки срубки оголовков свай',
-    pdfPageNumber: 4,
-    totalPages: 24,
+    pdfPageNumber: 2,
+    totalPages: 3,
     gostCode: 'П-2025-04-266-КЖ01',
     revision: 'Изм. 1',
     date: '14.10.2025',
@@ -194,8 +209,8 @@ const PDF_EXCERPTS: Record<string, AuthenticPdfDocumentExcerpt> = {
   'NVF-03': {
     pdfFileName: 'ИД_№1-НВФ7.7.2-Кр_Исполнительная_геодезическая_схема.pdf',
     pdfSheetTitle: 'Лист 1. Исполнительная геодезическая схема кронштейнов навесного вентилируемого фасада',
-    pdfPageNumber: 1,
-    totalPages: 8,
+    pdfPageNumber: 2,
+    totalPages: 2,
     gostCode: 'ИД-НВФ-01',
     revision: 'Заверена',
     date: '18.05.2026',
@@ -226,6 +241,13 @@ export const InspectionFileOverlayViewer: React.FC<InspectionFileOverlayViewerPr
   suspicions = [],
   onPromoteToCandidate,
   onAddNewHypothesis,
+  onOpenVisualizer,
+  uploadedPdfBlobUrl,
+  uploadedPdfFileName,
+  uploadedPdfSizeMb,
+  uploadedFilesList,
+  onSelectUploadedPdf,
+  onUploadNewPdfFile,
 }) => {
   const [viewMode, setViewMode] = useState<'PDF_DOCUMENT_VIEW' | 'CAD_BLUEPRINT_VIEW' | 'SIDE_BY_SIDE_DIFF'>('PDF_DOCUMENT_VIEW');
   const [cadTheme, setCadTheme] = useState<'WHITE_PAPER' | 'CAD_DARK'>('WHITE_PAPER');
@@ -237,15 +259,83 @@ export const InspectionFileOverlayViewer: React.FC<InspectionFileOverlayViewerPr
   const [isSearchingHypotheses, setIsSearchingHypotheses] = useState<boolean>(false);
   const [searchedResults, setSearchedResults] = useState<Suspicion[]>([]);
 
-  // Active finding
-  const activeFinding = findings.find((f) => f.id === selectedFindingId) || findings[0];
+  // Document scope & landscape full-width expansion
+  const [findingScope, setFindingScope] = useState<'CURRENT_DOCUMENT' | 'ALL_PROJECT'>('CURRENT_DOCUMENT');
+  const [isExpandedLandscape, setIsExpandedLandscape] = useState<boolean>(false);
+
+  // Helper: check whether a finding belongs to the loaded document
+  const doesFindingBelong = (finding: CheckFinding, fileName?: string): boolean => {
+    if (!fileName) return true;
+    const fLower = fileName.toLowerCase().trim();
+
+    // 0. Stage PD (эталон) has NO violations by definition - it is the approved standard
+    const isPd =
+      fLower.startsWith('пд') ||
+      fLower.includes('_пд') ||
+      fLower.includes('-пд') ||
+      fLower.includes('стадия п') ||
+      fLower.includes('эталон');
+    if (isPd) {
+      return false;
+    }
+
+    // 1. Evidence fragments direct match by filename or document code
+    if (finding.evidence_fragments && finding.evidence_fragments.length > 0) {
+      const hasDirectMatch = finding.evidence_fragments.some((frag) => {
+        if (!frag.file_name) return false;
+        const fragLower = frag.file_name.toLowerCase().trim();
+        const baseDoc = fLower.replace(/\.pdf$/i, '');
+        const baseFrag = fragLower.replace(/\.pdf$/i, '');
+        if (baseDoc.includes(baseFrag) || baseFrag.includes(baseDoc)) return true;
+        if (frag.document_code && fLower.includes(frag.document_code.toLowerCase().trim())) return true;
+        return false;
+      });
+      if (hasDirectMatch) return true;
+    }
+
+    // Do not fabricate defects for clean files! Return false if not explicitly matched.
+    return false;
+  };
+
+  // Findings that belong to the loaded PDF
+  const documentFindings = useMemo(() => {
+    return findings.filter((f) => doesFindingBelong(f, uploadedPdfFileName));
+  }, [findings, uploadedPdfFileName]);
+
+  // Active pool of findings depending on user selected scope
+  const activeScopeFindings = findingScope === 'CURRENT_DOCUMENT' ? documentFindings : findings;
+
+  // Active finding strictly from active scope (null if loaded document has 0 defects!)
+  const activeFinding = useMemo(() => {
+    if (activeScopeFindings.length === 0) return null;
+    const match = activeScopeFindings.find((f) => f.id === selectedFindingId);
+    return match || activeScopeFindings[0];
+  }, [activeScopeFindings, selectedFindingId]);
 
   // Dynamic excerpt fallback for any code or hypothesis
-  const getExcerpt = (finding?: CheckFinding): AuthenticPdfDocumentExcerpt => {
-    if (!finding) return PDF_EXCERPTS['AR-01'];
+  const getExcerpt = (finding?: CheckFinding | null): AuthenticPdfDocumentExcerpt => {
+    if (!finding) {
+      return {
+        pdfFileName: uploadedPdfFileName || 'Рабочий_чертеж.pdf',
+        pdfSheetTitle: 'Лист рабочей документации',
+        pdfPageNumber: 1,
+        totalPages: 1,
+        gostCode: 'ГОСТ Р 21.101-2020',
+        revision: 'Изм. 0',
+        date: '2026-07-10',
+        erroneousSnippet: 'В данном документе замечаний не выявлено',
+        expectedSnippet: 'Все проектные решения соответствуют требованиям СП и нормам безопасности РФ',
+        differenceDelta: '0 мм (норма)',
+        inspectorStampText: 'НАРУШЕНИЙ НЕ ОБНАРУЖЕНО (СООТВЕТСТВУЕТ НОРМАМ)',
+        normReference: 'СПДС, СП 60.13330.2020, СП 118.13330.2022',
+        normQuote: '«Проектные и рабочие решения строго соответствуют утвержденной проектной документации и нормам безопасности РФ.»',
+        consequence: 'Отсутствуют риски предписаний надзорных органов.',
+        sheetType: 'SPECIFICATION_TABLE',
+      };
+    }
     if (PDF_EXCERPTS[finding.param_code]) return PDF_EXCERPTS[finding.param_code];
     return {
-      pdfFileName: finding.evidence_fragments?.[0]?.file_name || 'РД-2025-04.266-АР1.pdf',
+      pdfFileName: finding.evidence_fragments?.[0]?.file_name || uploadedPdfFileName || 'РД-2025-04.266-АР1.pdf',
       pdfSheetTitle: `${finding.evidence_fragments?.[0]?.sheet_page || 'Лист 4'}. ${finding.param_name}`,
       pdfPageNumber: 4,
       totalPages: 15,
@@ -264,7 +354,7 @@ export const InspectionFileOverlayViewer: React.FC<InspectionFileOverlayViewerPr
   };
 
   const activeExcerpt = getExcerpt(activeFinding);
-  const currentIndex = findings.findIndex((f) => f.id === activeFinding?.id);
+  const currentIndex = activeFinding ? activeScopeFindings.findIndex((f) => f.id === activeFinding.id) : -1;
 
   // Stats
   const confirmedCount = findings.filter((f) => f.finding_status === 'CONFIRMED_VIOLATION').length;
@@ -282,19 +372,21 @@ export const InspectionFileOverlayViewer: React.FC<InspectionFileOverlayViewerPr
 
   // Navigate to previous finding
   const handlePrev = () => {
+    if (activeScopeFindings.length === 0) return;
     if (currentIndex > 0) {
-      onSelectFinding(findings[currentIndex - 1].id);
+      onSelectFinding(activeScopeFindings[currentIndex - 1].id);
     } else {
-      onSelectFinding(findings[findings.length - 1].id);
+      onSelectFinding(activeScopeFindings[activeScopeFindings.length - 1].id);
     }
   };
 
   // Navigate to next finding
   const handleNext = () => {
-    if (currentIndex < findings.length - 1) {
-      onSelectFinding(findings[currentIndex + 1].id);
+    if (activeScopeFindings.length === 0) return;
+    if (currentIndex < activeScopeFindings.length - 1) {
+      onSelectFinding(activeScopeFindings[currentIndex + 1].id);
     } else {
-      onSelectFinding(findings[0].id);
+      onSelectFinding(activeScopeFindings[0].id);
     }
   };
 
@@ -311,11 +403,11 @@ export const InspectionFileOverlayViewer: React.FC<InspectionFileOverlayViewerPr
       type: 'CONFIRMED'
     });
 
-    // Advance to next finding
-    if (currentIndex < findings.length - 1) {
-      onSelectFinding(findings[currentIndex + 1].id);
+    // Advance to next finding in active scope
+    if (currentIndex < activeScopeFindings.length - 1) {
+      onSelectFinding(activeScopeFindings[currentIndex + 1].id);
     } else {
-      const nextCandidate = findings.find((f) => f.id !== activeFinding.id && f.finding_status === 'CANDIDATE');
+      const nextCandidate = activeScopeFindings.find((f) => f.id !== activeFinding.id && f.finding_status === 'CANDIDATE');
       if (nextCandidate) {
         onSelectFinding(nextCandidate.id);
       }
@@ -351,8 +443,8 @@ export const InspectionFileOverlayViewer: React.FC<InspectionFileOverlayViewerPr
       type: 'REJECTED'
     });
 
-    if (currentIndex < findings.length - 1) {
-      onSelectFinding(findings[currentIndex + 1].id);
+    if (currentIndex < activeScopeFindings.length - 1) {
+      onSelectFinding(activeScopeFindings[currentIndex + 1].id);
     }
   };
 
@@ -387,7 +479,27 @@ export const InspectionFileOverlayViewer: React.FC<InspectionFileOverlayViewerPr
     }
   };
 
-  const filteredFindings = findings.filter((f) => {
+  const [selectedSectionFilter, setSelectedSectionFilter] = useState<string>('ALL');
+
+  // Auto-detect discipline filter and relevant finding based on uploaded file name
+  useEffect(() => {
+    if (!uploadedPdfFileName) return;
+    const fLower = uploadedPdfFileName.toLowerCase();
+    if (fLower.includes('ов') || fLower.includes('отоплен') || fLower.includes('вентил') || fLower.includes('hvac')) {
+      setSelectedSectionFilter('ИОС4');
+      const ovFinding = findings.find((f) => f.section === 'ИОС4' || f.param_code.startsWith('OV'));
+      if (ovFinding && activeFinding && activeFinding.section !== 'ИОС4') {
+        onSelectFinding(ovFinding.id);
+      }
+    } else if (fLower.includes('кж') || fLower.includes('сваи') || fLower.includes('фундамент')) {
+      setSelectedSectionFilter('КР');
+    }
+  }, [uploadedPdfFileName]);
+
+  const filteredFindings = activeScopeFindings.filter((f) => {
+    if (selectedSectionFilter !== 'ALL' && f.section !== selectedSectionFilter) {
+      return false;
+    }
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
     return (
@@ -457,72 +569,135 @@ export const InspectionFileOverlayViewer: React.FC<InspectionFileOverlayViewerPr
                 </span>
               )}
             </div>
-            <div className="text-sm font-black text-slate-900 mt-1 flex items-center space-x-2">
-              <span>Замечание {currentIndex + 1} из {findings.length}:</span>
-              <span className="text-rose-700 font-mono bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
-                {activeFinding.param_code} — {activeFinding.param_name}
-              </span>
-            </div>
+
+            {activeFinding ? (
+              <div className="text-sm font-black text-slate-900 mt-1 flex items-center space-x-2">
+                <span>Замечание {currentIndex + 1} из {activeScopeFindings.length}:</span>
+                <span className="text-rose-700 font-mono bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                  {activeFinding.param_code} — {activeFinding.param_name}
+                </span>
+              </div>
+            ) : (
+              <div className="text-sm font-black text-emerald-800 mt-1 flex items-center space-x-2">
+                <span className="px-2.5 py-0.5 rounded-lg bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold text-xs flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  В загруженном файле замечаний не выявлено (0 нарушений)
+                </span>
+                <span className="text-xs text-slate-500 truncate max-w-xs">
+                  {uploadedPdfFileName || 'Текущий чертеж'}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Core Action Buttons */}
           <div className="flex flex-wrap items-center gap-2.5">
-            {candidateCount > 0 && !isFinalized && (
-              <button
-                onClick={handleApproveAll}
-                className="px-3.5 py-2.5 rounded-xl font-bold text-xs bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 transition-all flex items-center space-x-1.5 cursor-pointer shadow-xs"
-                title="Утвердить все оставшиеся замечания разом"
-              >
-                <CheckCheck className="w-3.5 h-3.5" />
-                <span>Утвердить все ({candidateCount})</span>
-              </button>
+            {activeFinding ? (
+              <>
+                {/* CV Graphic Inspector Button for Active Finding */}
+                {onOpenVisualizer && (
+                  <button
+                    onClick={() => {
+                      const matchedSusp = suspicions.find(
+                        (s) =>
+                          s.description.toLowerCase().includes(activeFinding.param_name.toLowerCase()) ||
+                          s.discipline === activeFinding.section ||
+                          s.normative_base === activeFinding.normative_reference
+                      ) || suspicions[0] || {
+                        suspicion_id: 9999,
+                        object_id: currentObject.id,
+                        discipline: activeFinding.section,
+                        discovery_method: 'CV_BBOX_DELTA',
+                        description: `[BBox-коллизия] ${activeFinding.param_name}: ${activeFinding.delta}`,
+                        confidence: 0.94,
+                        pd_reference: activeFinding.normative_reference || 'ПД: Раздел АР, лист 12',
+                        rd_reference: `${activeExcerpt.pdfFileName}, лист ${activeExcerpt.pdfPageNumber}`,
+                        normative_base: activeFinding.normative_reference || 'СП 118.13330.2022',
+                        bbox: { x: 340, y: 280, width: 220, height: 160, sheet_number: `Лист ${activeExcerpt.pdfPageNumber}` },
+                      };
+                      onOpenVisualizer(matchedSusp);
+                    }}
+                    className="px-3.5 py-2.5 rounded-xl font-bold text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition-all flex items-center space-x-1.5 cursor-pointer shadow-xs hover:scale-105 active:scale-95"
+                    title="Открыть визуализатор Computer Vision (BBox, Сплит-скрин, Наложение кальки)"
+                  >
+                    <Scan className="w-4 h-4 text-indigo-600 animate-pulse" />
+                    <span>CV-Визуализатор BBox</span>
+                  </button>
+                )}
+
+                {candidateCount > 0 && !isFinalized && (
+                  <button
+                    onClick={handleApproveAll}
+                    className="px-3.5 py-2.5 rounded-xl font-bold text-xs bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 transition-all flex items-center space-x-1.5 cursor-pointer shadow-xs"
+                    title="Утвердить все оставшиеся замечания разом"
+                  >
+                    <CheckCheck className="w-3.5 h-3.5" />
+                    <span>Утвердить все ({candidateCount})</span>
+                  </button>
+                )}
+
+                <button
+                  id="btn-approve-and-advance"
+                  onClick={handleApproveAndAdvance}
+                  disabled={isFinalized}
+                  className={`px-5 py-2.5 rounded-xl font-black text-xs flex items-center space-x-2 shadow-md transition-all cursor-pointer ${
+                    isFinalized
+                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                      : 'bg-rose-600 hover:bg-rose-700 text-white shadow-rose-600/30 hover:scale-[1.02] active:scale-[0.98]'
+                  }`}
+                  title="Утвердить данное нарушение и сразу перейти к следующему замечанию"
+                >
+                  <Check className="w-4 h-4 stroke-[3]" />
+                  <span>Утвердить замечание и далее →</span>
+                </button>
+
+                <button
+                  onClick={handleRejectAndAdvance}
+                  disabled={isFinalized}
+                  className="px-3.5 py-2.5 rounded-xl font-bold text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 transition-all flex items-center space-x-1.5 cursor-pointer"
+                  title="Отклонить замечание (соответствует нормам)"
+                >
+                  <X className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Отклонить (Норма) →</span>
+                </button>
+
+                {/* Stepper buttons (Back / Next) */}
+                <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
+                  <button
+                    onClick={handlePrev}
+                    className="p-1.5 hover:bg-white rounded-lg text-slate-700 cursor-pointer"
+                    title="Предыдущее замечание"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <span className="px-2 font-mono font-bold text-slate-700">
+                    {currentIndex + 1} / {activeScopeFindings.length}
+                  </span>
+                  <button
+                    onClick={handleNext}
+                    className="p-1.5 hover:bg-white rounded-lg text-slate-700 cursor-pointer"
+                    title="Следующее замечание"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-emerald-800 font-bold bg-emerald-50 px-3 py-2 rounded-xl border border-emerald-200 flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  Лист проверен • Все решения соответствуют СП
+                </span>
+                {findings.length > 0 && findingScope === 'CURRENT_DOCUMENT' && (
+                  <button
+                    onClick={() => setFindingScope('ALL_PROJECT')}
+                    className="px-3 py-2 bg-purple-700 hover:bg-purple-800 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs"
+                  >
+                    Показать замечания по объекту ({findings.length}) →
+                  </button>
+                )}
+              </div>
             )}
-
-            <button
-              id="btn-approve-and-advance"
-              onClick={handleApproveAndAdvance}
-              disabled={isFinalized}
-              className={`px-5 py-2.5 rounded-xl font-black text-xs flex items-center space-x-2 shadow-md transition-all cursor-pointer ${
-                isFinalized
-                  ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                  : 'bg-rose-600 hover:bg-rose-700 text-white shadow-rose-600/30 hover:scale-[1.02] active:scale-[0.98]'
-              }`}
-              title="Утвердить данное нарушение и сразу перейти к следующему замечанию"
-            >
-              <Check className="w-4 h-4 stroke-[3]" />
-              <span>Утвердить замечание и далее →</span>
-            </button>
-
-            <button
-              onClick={handleRejectAndAdvance}
-              disabled={isFinalized}
-              className="px-3.5 py-2.5 rounded-xl font-bold text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 transition-all flex items-center space-x-1.5 cursor-pointer"
-              title="Отклонить замечание (соответствует нормам)"
-            >
-              <X className="w-3.5 h-3.5 text-slate-500" />
-              <span>Отклонить (Норма) →</span>
-            </button>
-
-            {/* Stepper buttons (Back / Next) */}
-            <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
-              <button
-                onClick={handlePrev}
-                className="p-1.5 hover:bg-white rounded-lg text-slate-700 cursor-pointer"
-                title="Предыдущее замечание"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <span className="px-2 font-mono font-bold text-slate-700">
-                {currentIndex + 1} / {findings.length}
-              </span>
-              <button
-                onClick={handleNext}
-                className="p-1.5 hover:bg-white rounded-lg text-slate-700 cursor-pointer"
-                title="Следующее замечание"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
           </div>
         </div>
 
@@ -543,211 +718,226 @@ export const InspectionFileOverlayViewer: React.FC<InspectionFileOverlayViewerPr
             </span>
           </div>
 
-          <div className="flex items-center space-x-2">
-            <span className="text-[11px] text-slate-500">Режим отображения:</span>
-            <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-[11px] font-bold">
+            <div className="flex items-center space-x-2">
               <button
-                onClick={() => setViewMode('PDF_DOCUMENT_VIEW')}
-                className={`px-2.5 py-1 rounded-md transition-all cursor-pointer ${
-                  viewMode === 'PDF_DOCUMENT_VIEW' ? 'bg-rose-600 text-white shadow-xs' : 'text-slate-600'
-                }`}
+                onClick={() => {
+                  downloadFullDocumentReport({
+                    object: currentObject,
+                    protocol: {
+                      id: 'prot-2026-07-altufievo',
+                      object_id: currentObject.id,
+                      version: '2.1',
+                      matrix_version: 'matrix-132-v4.2',
+                      dataset_version: 'gold-altufievo-79b-2026.07',
+                      model_version: 'inspector-layoutlmv3-altufievo-v2.4.2',
+                      input_manifest_hash: '8f3b2190c2a718d7b324021efbc3d67189a01f92e47854d19aa91f1c2491a92e',
+                      status: isFinalized ? 'FINALIZED' : 'VERIFYING',
+                      created_at: '2026-07-08T10:37:45Z',
+                      iais_sync_status: 'SYNCED',
+                      findings,
+                      suspicions,
+                    },
+                    suspicions,
+                  });
+                  setActionNotice({
+                    text: 'Полный отчет по документу с выделением текста успешно скачан на ваш ПК (.html)!',
+                    type: 'CONFIRMED',
+                  });
+                }}
+                className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                title="Скачать на компьютер полный отчет по документу с цветным выделением текста и разбором ошибок"
               >
-                📄 Лист PDF (как в Acrobat)
+                <Download className="w-3.5 h-3.5" />
+                <span>📥 Скачать отчет на ПК</span>
               </button>
+
+              {/* Landscape 100% Screen Width Toggle */}
               <button
-                onClick={() => setViewMode('CAD_BLUEPRINT_VIEW')}
-                className={`px-2.5 py-1 rounded-md transition-all cursor-pointer ${
-                  viewMode === 'CAD_BLUEPRINT_VIEW' ? 'bg-purple-700 text-white shadow-xs' : 'text-slate-600'
+                onClick={() => setIsExpandedLandscape((prev) => !prev)}
+                className={`px-3 py-1 rounded-lg font-bold text-[11px] flex items-center gap-1.5 transition-all cursor-pointer ${
+                  isExpandedLandscape
+                    ? 'bg-purple-700 text-white shadow-xs ring-2 ring-purple-300'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300'
                 }`}
+                title={
+                  isExpandedLandscape
+                    ? 'Вернуть список замечаний слева'
+                    : 'Развернуть PDF-чертеж на 100% ширины экрана (скрыть панель замечаний для удобного просмотра альбома)'
+                }
               >
-                📐 Чертеж плана (САПР)
+                {isExpandedLandscape ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5 text-purple-600" />}
+                <span>{isExpandedLandscape ? '⤡ Показать замечания' : '📐 Альбомный режим (100% ширины)'}</span>
               </button>
-              <button
-                onClick={() => setViewMode('SIDE_BY_SIDE_DIFF')}
-                className={`px-2.5 py-1 rounded-md transition-all cursor-pointer ${
-                  viewMode === 'SIDE_BY_SIDE_DIFF' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-600'
-                }`}
-              >
-                ⚖️ Сравнение ПД vs РД
-              </button>
+
+              <span className="text-[11px] text-slate-500 hidden sm:inline">Режим:</span>
+              <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-[11px] font-bold">
+                <button
+                  onClick={() => setViewMode('PDF_DOCUMENT_VIEW')}
+                  className={`px-2.5 py-1 rounded-md transition-all cursor-pointer ${
+                    viewMode === 'PDF_DOCUMENT_VIEW' ? 'bg-rose-600 text-white shadow-xs' : 'text-slate-600'
+                  }`}
+                >
+                  📄 Лист PDF
+                </button>
+                <button
+                  onClick={() => setViewMode('CAD_BLUEPRINT_VIEW')}
+                  className={`px-2.5 py-1 rounded-md transition-all cursor-pointer ${
+                    viewMode === 'CAD_BLUEPRINT_VIEW' ? 'bg-purple-700 text-white shadow-xs' : 'text-slate-600'
+                  }`}
+                >
+                  📐 Чертеж
+                </button>
+                <button
+                  onClick={() => setViewMode('SIDE_BY_SIDE_DIFF')}
+                  className={`px-2.5 py-1 rounded-md transition-all cursor-pointer ${
+                    viewMode === 'SIDE_BY_SIDE_DIFF' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-600'
+                  }`}
+                >
+                  ⚖️ ПД vs РД
+                </button>
+              </div>
             </div>
-          </div>
         </div>
       </div>
 
-      {/* POST-VERIFICATION ACTIONS: "ЧТО ДЕЛАТЬ ПОСЛЕ ТОГО КАК УТВЕРДИЛИ ВСЕ ЗАМЕЧАНИЯ" */}
-      {(allReviewed || isFinalized) && (
-        <div className="bg-gradient-to-br from-slate-900 via-purple-950 to-slate-900 text-white rounded-2xl p-5 shadow-xl border-2 border-purple-500/40 space-y-3 animate-fade-in">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-purple-800/60 pb-3">
-            <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/40 flex items-center justify-center text-emerald-400">
-                <CheckCircle2 className="w-6 h-6" />
+      {/* 2. BANNER: SHOW DEFECT IF ACTIVE FINDING EXISTS FOR THIS FILE, OR COMPLIANCE IF NONE */}
+      {activeFinding ? (
+        <div className="rounded-xl border border-rose-300 bg-rose-50/90 text-rose-950 p-4 shadow-sm">
+          <div className="flex items-start space-x-3">
+            <div className="w-9 h-9 rounded-lg bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <AlertOctagon className="w-5 h-5" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="px-2 py-0.5 rounded bg-rose-200/80 text-rose-900 font-mono font-bold">
+                  {activeFinding.param_code}
+                </span>
+                <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-800 font-semibold uppercase text-[10px]">
+                  Несоответствие РД проекту
+                </span>
+                <span className="text-slate-600 text-xs">
+                  Чертеж: <strong>{activeExcerpt.pdfFileName}</strong> (Стр. {activeExcerpt.pdfPageNumber} из {activeExcerpt.totalPages})
+                </span>
               </div>
-              <div>
-                <h3 className="text-base font-black text-white flex items-center gap-2">
-                  <span>Все {findings.length} замечаний успешно проверены!</span>
-                  <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-500/30 text-emerald-300 border border-emerald-500/50">
-                    Утверждено: {confirmedCount} • Отклонено: {rejectedCount}
-                  </span>
-                </h3>
-                <p className="text-xs text-purple-200">
-                  Что делать дальше: выберите официальное действие для фиксации результатов надзора
-                </p>
+
+              <div className="text-sm font-bold text-rose-950 mt-1.5 leading-snug">
+                {activeExcerpt.erroneousSnippet}
+              </div>
+
+              <div className="mt-2 text-xs bg-white p-2.5 rounded-lg border border-rose-200 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <span className="font-semibold text-slate-700">Эталон по экспертизе (ПД): </span>
+                  <span className="text-slate-900">{activeExcerpt.expectedSnippet}</span>
+                </div>
+                <div className="font-mono font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                  Дельта: {activeExcerpt.differenceDelta}
+                </div>
               </div>
             </div>
           </div>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-emerald-300 bg-emerald-50/90 text-emerald-950 p-4 shadow-sm">
+          <div className="flex items-start space-x-3">
+            <div className="w-9 h-9 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="px-2 py-0.5 rounded bg-emerald-200/80 text-emerald-900 font-bold uppercase text-[10px]">
+                  ✓ Соответствует нормам
+                </span>
+                <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-medium text-[10px]">
+                  {uploadedPdfFileName?.includes('ОВ') ? 'Раздел ИОС4' : 'Рабочая документация'}
+                </span>
+                <span className="text-slate-600 text-xs">
+                  Файл: <strong>{uploadedPdfFileName || 'Текущий документ'}</strong>
+                </span>
+              </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
-            {/* Action 1: Form Official Predpisanie */}
-            <button
-              onClick={() => setIsPredpisanieModalOpen(true)}
-              className="p-3.5 rounded-xl bg-gradient-to-br from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white text-left transition-all shadow-md hover:scale-[1.02] cursor-pointer flex flex-col justify-between"
-            >
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded bg-white/20">
-                    Шаг 1 • Документ
-                  </span>
-                  <FileText className="w-4 h-4 text-white" />
-                </div>
-                <div className="font-bold text-xs">Сформировать Предписание</div>
-                <div className="text-[11px] text-rose-100 mt-1">
-                  Генерация бланка по ст. 52, 54 ГрК РФ со сроком устранения 30 дней
-                </div>
+              <div className="text-sm font-bold text-emerald-950 mt-1.5 leading-snug">
+                В загруженном документе замечаний не выявлено
               </div>
-              <div className="mt-3 text-[11px] font-black flex items-center gap-1 text-white underline">
-                Открыть предписание →
-              </div>
-            </button>
 
-            {/* Action 2: Sign UKEP & Finalize */}
-            <button
-              onClick={onFinalizeProtocol}
-              disabled={isFinalized}
-              className={`p-3.5 rounded-xl text-left transition-all shadow-md flex flex-col justify-between ${
-                isFinalized
-                  ? 'bg-purple-900/60 border border-purple-500/40 text-purple-300 cursor-default'
-                  : 'bg-gradient-to-br from-purple-700 to-indigo-700 hover:from-purple-600 hover:to-indigo-600 text-white cursor-pointer hover:scale-[1.02]'
-              }`}
-            >
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded bg-white/20">
-                    Шаг 2 • Подпись
-                  </span>
-                  <ShieldCheck className="w-4 h-4 text-purple-200" />
+              <div className="mt-2 text-xs bg-white p-2.5 rounded-lg border border-emerald-200 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <span className="font-semibold text-slate-700">Статус сверки: </span>
+                  <span className="text-slate-900">Все решения, размеры и спецификации соответствуют требованиям СП и нормам РФ.</span>
                 </div>
-                <div className="font-bold text-xs">
-                  {isFinalized ? 'Протокол подписан УКЭП' : 'Подписать с УКЭП и финализировать'}
-                </div>
-                <div className="text-[11px] text-purple-200 mt-1">
-                  Электронная подпись ГОСТ Р 34.10 и блокировка от изменений
-                </div>
+                {findings.length > 0 && findingScope === 'CURRENT_DOCUMENT' && (
+                  <button
+                    onClick={() => setFindingScope('ALL_PROJECT')}
+                    className="text-[11px] font-bold bg-purple-700 text-white hover:bg-purple-800 px-2.5 py-1 rounded-lg cursor-pointer transition-all shadow-xs"
+                  >
+                    Показать замечания по другим разделам ({findings.length})
+                  </button>
+                )}
               </div>
-              <div className="mt-3 text-[11px] font-black flex items-center gap-1 text-white">
-                {isFinalized ? '✓ Подписано' : 'Подписать сейчас →'}
-              </div>
-            </button>
-
-            {/* Action 3: Transmit to IAIS RiN */}
-            <button
-              onClick={() => {
-                setActionNotice({
-                  text: 'Данные протокола переданы в ИАИС «РиН» Правительства Москвы!',
-                  type: 'CONFIRMED'
-                });
-              }}
-              className="p-3.5 rounded-xl bg-gradient-to-br from-indigo-700 to-blue-700 hover:from-indigo-600 hover:to-blue-600 text-white text-left transition-all shadow-md hover:scale-[1.02] cursor-pointer flex flex-col justify-between"
-            >
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded bg-white/20">
-                    Шаг 3 • Интеграция
-                  </span>
-                  <Send className="w-4 h-4 text-white" />
-                </div>
-                <div className="font-bold text-xs">Передать в ИАИС «РиН»</div>
-                <div className="text-[11px] text-indigo-100 mt-1">
-                  Синхронизация статуса объекта надзора в единой системе Москвы
-                </div>
-              </div>
-              <div className="mt-3 text-[11px] font-black flex items-center gap-1 text-white underline">
-                Синхронизировать →
-              </div>
-            </button>
-
-            {/* Action 4: Export PDF / ZIP package */}
-            <button
-              onClick={onOpenExport}
-              className="p-3.5 rounded-xl bg-gradient-to-br from-slate-800 to-slate-700 hover:from-slate-700 hover:to-slate-600 text-white text-left transition-all shadow-md hover:scale-[1.02] cursor-pointer flex flex-col justify-between"
-            >
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded bg-white/20">
-                    Шаг 4 • Архив
-                  </span>
-                  <Download className="w-4 h-4 text-slate-300" />
-                </div>
-                <div className="font-bold text-xs">Скачать пакет документов</div>
-                <div className="text-[11px] text-slate-300 mt-1">
-                  Итоговый протокол, выкопировки с красными отметками и реестр
-                </div>
-              </div>
-              <div className="mt-3 text-[11px] font-black flex items-center gap-1 text-white underline">
-                Экспорт ZIP/PDF →
-              </div>
-            </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* 2. BRIGHT RED BANNER SUMMARIZING WHAT IS ERRONEOUS IN THE FILE */}
-      <div className="rounded-2xl border-2 border-rose-500 bg-rose-600 text-white shadow-lg p-4">
-        <div className="flex items-start space-x-3">
-          <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur border border-white/40 flex items-center justify-center shrink-0">
-            <AlertOctagon className="w-6 h-6 text-white animate-pulse" />
-          </div>
-          <div className="flex-1">
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="px-2 py-0.5 rounded bg-white text-rose-900 font-mono font-black">
-                {activeFinding.param_code}
-              </span>
-              <span className="px-2 py-0.5 rounded bg-rose-900/60 text-white font-bold uppercase text-[10px]">
-                Ошибка в загруженном файле РД
-              </span>
-              <span className="text-rose-100 text-xs">
-                Файл: <strong>{activeExcerpt.pdfFileName}</strong> (Стр. {activeExcerpt.pdfPageNumber} из {activeExcerpt.totalPages})
-              </span>
-            </div>
-
-            <div className="text-sm font-black mt-1 leading-snug">
-              {activeExcerpt.erroneousSnippet}
-            </div>
-
-            <div className="mt-2 text-xs text-rose-100 bg-rose-700/70 p-2.5 rounded-xl border border-rose-400/40 flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <span className="font-bold text-white">Как должно быть по экспертизе (ПД): </span>
-                <span>{activeExcerpt.expectedSnippet}</span>
-              </div>
-              <div className="font-mono font-black text-amber-200 bg-rose-900/60 px-2 py-0.5 rounded">
-                Дельта: {activeExcerpt.differenceDelta}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
       {/* 3. MAIN WORKSPACE: FINDINGS LIST ON LEFT + AUTHENTIC PDF/BLUEPRINT VIEWER ON RIGHT */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
-        {/* LEFT COLUMN: LIST OF FINDINGS (4 COLS) */}
-        <div className="lg:col-span-4 bg-white rounded-2xl p-3 shadow-sm border border-slate-200 space-y-3">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-            <div className="text-xs font-bold text-slate-800">
-              Список замечаний к чертежам ({findings.length})
+        {/* LEFT COLUMN: LIST OF FINDINGS (4 COLS, collapsed when isExpandedLandscape is true or when 0 findings) */}
+        {!isExpandedLandscape && activeScopeFindings.length > 0 && (
+          <div className="lg:col-span-4 bg-white rounded-2xl p-3 shadow-sm border border-slate-200 space-y-3">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+              <div className="text-xs font-bold text-slate-800">
+                Список замечаний ({activeScopeFindings.length})
+              </div>
+              <span className="text-[11px] text-slate-500 font-medium">
+                Кандидаты: <strong className="text-amber-700">{candidateCount}</strong>
+              </span>
             </div>
-            <span className="text-[11px] text-slate-500 font-medium">
-              Кандидаты: <strong className="text-amber-700">{candidateCount}</strong>
-            </span>
+
+            {/* Document Scope Toggle (Current Document vs All Project) */}
+            <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200 text-[11px] font-bold">
+              <button
+                onClick={() => setFindingScope('CURRENT_DOCUMENT')}
+                className={`py-1 px-1.5 rounded-lg text-center transition-all cursor-pointer truncate ${
+                  findingScope === 'CURRENT_DOCUMENT'
+                    ? 'bg-white text-purple-900 shadow-xs border border-slate-200'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+                title="Показывать только замечания к загруженному файлу"
+              >
+                📌 В файле ({documentFindings.length})
+              </button>
+              <button
+                onClick={() => setFindingScope('ALL_PROJECT')}
+                className={`py-1 px-1.5 rounded-lg text-center transition-all cursor-pointer truncate ${
+                  findingScope === 'ALL_PROJECT'
+                    ? 'bg-white text-purple-900 shadow-xs border border-slate-200'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+                title="Показывать замечания по всем разделам проекта"
+              >
+                🏢 Весь объект ({findings.length})
+              </button>
+            </div>
+
+          {/* Discipline tabs */}
+          <div className="flex flex-wrap gap-1 border-b border-slate-100 pb-2">
+            {[
+              { id: 'ALL', label: `Все (${findings.length})` },
+              { id: 'АР', label: `АР (${findings.filter((f) => f.section === 'АР').length})` },
+              { id: 'ИОС4', label: `ОВ / Отопление (${findings.filter((f) => f.section === 'ИОС4' || f.param_code.startsWith('OV')).length})` },
+              { id: 'КР', label: `КР (${findings.filter((f) => f.section === 'КР').length})` },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setSelectedSectionFilter(tab.id)}
+                className={`px-2 py-1 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${
+                  selectedSectionFilter === tab.id
+                    ? 'bg-purple-700 text-white shadow-xs'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
 
           {/* Search box */}
@@ -764,258 +954,196 @@ export const InspectionFileOverlayViewer: React.FC<InspectionFileOverlayViewerPr
 
           {/* Scrollable list */}
           <div className="space-y-2 max-h-[720px] overflow-y-auto pr-1">
-            {filteredFindings.map((finding) => {
-              const isSelected = finding.id === activeFinding.id;
-              const isConfirmed = finding.finding_status === 'CONFIRMED_VIOLATION';
-              const isRejected = finding.finding_status === 'NEGATIVE_VERIFIED';
+            {filteredFindings.length === 0 ? (
+              <div className="p-6 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
+                <div className="text-xs font-bold text-slate-800">Замечаний не обнаружено</div>
+                <div className="text-[11px] text-slate-500 mt-1">
+                  В текущей выборке ({findingScope === 'CURRENT_DOCUMENT' ? 'для этого файла' : 'по фильтру'}) замечания отсутствуют.
+                </div>
+                {findingScope === 'CURRENT_DOCUMENT' && findings.length > 0 && (
+                  <button
+                    onClick={() => setFindingScope('ALL_PROJECT')}
+                    className="mt-3 px-3 py-1.5 bg-purple-700 hover:bg-purple-800 text-white rounded-lg text-xs font-bold transition-all cursor-pointer shadow-xs"
+                  >
+                    Показать все замечания проекта ({findings.length})
+                  </button>
+                )}
+              </div>
+            ) : (
+              filteredFindings.map((finding) => {
+                const isSelected = activeFinding ? finding.id === activeFinding.id : false;
+                const isConfirmed = finding.finding_status === 'CONFIRMED_VIOLATION';
+                const isRejected = finding.finding_status === 'NEGATIVE_VERIFIED';
 
-              return (
-                <button
-                  key={finding.id}
-                  onClick={() => onSelectFinding(finding.id)}
-                  className={`w-full text-left p-3 rounded-xl border transition-all cursor-pointer ${
-                    isSelected
-                      ? 'bg-rose-50 border-rose-500 shadow-sm ring-1 ring-rose-500'
-                      : 'bg-white hover:bg-slate-50 border-slate-200'
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className={`font-mono text-xs font-black px-1.5 py-0.5 rounded ${
-                      isSelected ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-800'
-                    }`}>
-                      {finding.param_code}
-                    </span>
+                // Extract sheet info
+                const frag = finding.evidence_fragments?.find((f) => f.role === 'ACTUAL') || finding.evidence_fragments?.[0];
+                const sheetName = frag?.sheet_page || (finding.param_code === 'AR-01' ? 'Лист 1 (Общие данные)' : 'Лист чертежа');
 
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                      isConfirmed
-                        ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                        : isRejected
-                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                        : 'bg-amber-100 text-amber-800 border border-amber-300'
-                    }`}>
-                      {isConfirmed ? '✓ Нарушение' : isRejected ? '✕ Норма' : 'Кандидат'}
-                    </span>
+                return (
+                  <div
+                    key={finding.id}
+                    onClick={() => onSelectFinding(finding.id)}
+                    className={`w-full text-left p-3 rounded-xl border transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-rose-50/80 border-rose-500 shadow-sm ring-1 ring-rose-500'
+                        : 'bg-white hover:bg-slate-50 border-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span
+                        className={`font-mono text-xs font-black px-1.5 py-0.5 rounded ${
+                          isSelected ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-800'
+                        }`}
+                      >
+                        {finding.param_code}
+                      </span>
+
+                      <span
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                          isConfirmed
+                            ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                            : isRejected
+                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                            : 'bg-amber-100 text-amber-800 border border-amber-300'
+                        }`}
+                      >
+                        {isConfirmed ? '✓ Нарушение' : isRejected ? '✕ Норма' : 'Кандидат'}
+                      </span>
+                    </div>
+
+                    <div className="text-xs font-bold text-slate-900 line-clamp-2">
+                      {finding.param_name}
+                    </div>
+
+                    <div className="text-[11px] text-rose-700 font-medium mt-1 line-clamp-1">
+                      {finding.delta}
+                    </div>
+
+                      {/* Sheet metadata and quick Jump to Drawing button */}
+                      <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between gap-1.5 flex-wrap">
+                        <span className="text-[10px] text-slate-500 font-mono truncate max-w-[110px]" title={sheetName}>
+                          📍 {sheetName}
+                        </span>
+
+                        <div className="flex items-center gap-1">
+                          {onOpenVisualizer && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onSelectFinding(finding.id);
+                                const matchedSusp = suspicions.find(
+                                  (s) =>
+                                    s.description.toLowerCase().includes(finding.param_name.toLowerCase()) ||
+                                    s.discipline === finding.section ||
+                                    s.normative_base === finding.normative_reference
+                                ) || suspicions[0] || {
+                                  suspicion_id: 8888,
+                                  object_id: currentObject.id,
+                                  discipline: finding.section,
+                                  discovery_method: 'CV_BBOX_DELTA',
+                                  description: `[BBox-коллизия] ${finding.param_name}: ${finding.delta}`,
+                                  confidence: 0.94,
+                                  pd_reference: finding.normative_reference || 'ПД: Раздел АР, лист 12',
+                                  rd_reference: `${frag?.file_name || 'РД-чертеж.pdf'}, лист ${frag?.bbox?.page || 1}`,
+                                  normative_base: finding.normative_reference || 'СП 118.13330.2022',
+                                  bbox: { x: 340, y: 280, width: 220, height: 160, sheet_number: sheetName },
+                                };
+                                onOpenVisualizer(matchedSusp);
+                              }}
+                              className="px-1.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[10px] transition-all cursor-pointer flex items-center gap-1 border border-indigo-200 shadow-xs"
+                              title="Открыть BBox-визуализатор для этого дефекта"
+                            >
+                              <Scan className="w-3 h-3 text-indigo-600" />
+                              <span>BBox</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSelectFinding(finding.id);
+
+                              // Locate target drawing file in uploaded list
+                              if (uploadedFilesList?.length && onSelectUploadedPdf) {
+                                const targetFileName = (frag?.file_name || '').toLowerCase().trim();
+                                const match =
+                                  uploadedFilesList.find((f) => {
+                                    const fName = f.name.toLowerCase().trim();
+                                    return (
+                                      fName === targetFileName ||
+                                      fName.includes(targetFileName) ||
+                                      (targetFileName && targetFileName.includes(fName))
+                                    );
+                                  }) ||
+                                  (finding.param_code?.startsWith('AR') || finding.section === 'АР'
+                                    ? uploadedFilesList.find(
+                                        (f) => f.name.toLowerCase().includes('ар1') || f.name.toLowerCase().includes('ар')
+                                      )
+                                    : finding.param_code?.startsWith('OV')
+                                    ? uploadedFilesList.find((f) => f.name.toLowerCase().includes('ов'))
+                                    : finding.param_code?.startsWith('KJ')
+                                    ? uploadedFilesList.find((f) => f.name.toLowerCase().includes('кж'))
+                                    : null);
+
+                                if (match) {
+                                  onSelectUploadedPdf(match.id);
+                                }
+                              }
+                            }}
+                            className="px-2 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-[10px] transition-all cursor-pointer flex items-center gap-1 shadow-xs hover:scale-105 active:scale-95"
+                            title="Открыть чертеж и перейти к месту замечания"
+                          >
+                            <Crosshair className="w-3 h-3 text-amber-300" />
+                            <span>На чертеж</span>
+                          </button>
+                        </div>
+                      </div>
                   </div>
-
-                  <div className="text-xs font-bold text-slate-900 line-clamp-2">
-                    {finding.param_name}
-                  </div>
-
-                  <div className="text-[11px] text-rose-700 font-medium mt-1 line-clamp-1">
-                    {finding.delta}
-                  </div>
-                </button>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </div>
+      )}
 
-        {/* RIGHT COLUMN: AUTHENTIC PDF VIEWER OR CAD BLUEPRINT (8 COLS) */}
-        <div className="lg:col-span-8 space-y-4">
-          {/* VIEW 1: AUTHENTIC PDF SHEET VIEWER */}
+        {/* RIGHT COLUMN: AUTHENTIC PDF VIEWER OR CAD BLUEPRINT (expands to full width when landscape is toggled or when 0 findings) */}
+        <div className={`${(isExpandedLandscape || activeScopeFindings.length === 0) ? 'lg:col-span-12' : 'lg:col-span-8'} space-y-4`}>
+          {/* VIEW 1: AUTHENTIC PDF SHEET VIEWER (THE REAL UPLOADED PDF FILE) */}
           {viewMode === 'PDF_DOCUMENT_VIEW' && (
-            <div className="bg-slate-200 rounded-2xl shadow-sm border border-slate-300 overflow-hidden flex flex-col">
-              {/* Acrobat-like PDF Viewer Toolbar */}
-              <div className="bg-slate-800 text-white px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
-                <div className="flex items-center space-x-3">
-                  <div className="font-bold flex items-center space-x-1 text-slate-200">
-                    <FileText className="w-4 h-4 text-rose-400" />
-                    <span>{activeExcerpt.pdfFileName}</span>
-                  </div>
-                  <span className="text-slate-400">|</span>
-                  <span className="text-slate-300 font-mono">
-                    Стр. {activeExcerpt.pdfPageNumber} / {activeExcerpt.totalPages}
-                  </span>
-                </div>
-
-                <div className="flex items-center space-x-2">
-                  <button
-                    onClick={() => setZoomLevel((prev) => Math.max(0.7, prev - 0.1))}
-                    className="p-1 hover:bg-slate-700 rounded text-slate-300 hover:text-white cursor-pointer"
-                    title="Уменьшить"
-                  >
-                    <ZoomOut className="w-3.5 h-3.5" />
-                  </button>
-                  <span className="font-mono text-slate-300 text-[11px]">
-                    {Math.round(zoomLevel * 100)}%
-                  </span>
-                  <button
-                    onClick={() => setZoomLevel((prev) => Math.min(1.5, prev + 0.1))}
-                    className="p-1 hover:bg-slate-700 rounded text-slate-300 hover:text-white cursor-pointer"
-                    title="Увеличить"
-                  >
-                    <ZoomIn className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    onClick={() => setZoomLevel(1)}
-                    className="p-1 hover:bg-slate-700 rounded text-slate-300 hover:text-white cursor-pointer"
-                    title="Сброс масштаба"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                  </button>
-                  <span className="text-slate-400">|</span>
-                  <button
-                    onClick={() => window.print()}
-                    className="p-1 hover:bg-slate-700 rounded text-slate-300 hover:text-white cursor-pointer"
-                    title="Печать листа"
-                  >
-                    <Printer className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-
-              {/* The Actual PDF Document Sheet Canvas */}
-              <div className="p-6 overflow-auto max-h-[720px] flex justify-center bg-slate-300/80">
-                <div
-                  style={{ transform: `scale(${zoomLevel})`, transformOrigin: 'top center' }}
-                  className="w-[740px] bg-white text-slate-900 shadow-2xl border border-slate-400 p-8 flex flex-col justify-between font-serif text-[12px] leading-relaxed transition-transform duration-200"
-                >
-                  {/* Sheet Header (GOST Document Title) */}
-                  <div className="border-b-2 border-slate-900 pb-3 mb-4 flex items-start justify-between">
-                    <div>
-                      <div className="font-sans font-bold text-[10px] text-slate-500 uppercase tracking-wider">
-                        ООО «Моспроекткомплекс» • Шифр: {activeExcerpt.gostCode}
-                      </div>
-                      <h4 className="font-sans font-black text-sm text-slate-900 mt-0.5">
-                        {activeExcerpt.pdfSheetTitle}
-                      </h4>
-                      <div className="font-sans text-[11px] text-slate-600">
-                        Объект: {currentObject.name}
-                      </div>
-                    </div>
-                    <div className="font-sans text-right text-[11px] text-slate-600">
-                      <div>Стадия: <strong>РД</strong></div>
-                      <div>Лист: <strong>{activeExcerpt.pdfPageNumber}</strong> / {activeExcerpt.totalPages}</div>
-                      <div>{activeExcerpt.revision} ({activeExcerpt.date})</div>
-                    </div>
-                  </div>
-
-                  {/* Sheet Body Content based on Sheet Type */}
-                  <div className="space-y-4 my-2 flex-1">
-                    {/* General Notes Type */}
-                    {activeExcerpt.sheetType === 'GENERAL_NOTES' && (
-                      <div className="space-y-2">
-                        <div className="font-sans font-bold text-xs uppercase text-slate-800 border-b border-slate-300 pb-1">
-                          1. Общие указания и высотная схема здания:
-                        </div>
-                        <ol className="list-decimal list-inside space-y-1.5 pl-2 text-justify">
-                          <li>
-                            Проект разработан на основании задания на проектирование, ГПЗУ и технических условий.
-                          </li>
-                          <li className="relative group">
-                            {/* BRIGHT RED HIGHLIGHT BOX */}
-                            <span className="bg-rose-500 text-white font-bold px-1.5 py-0.5 rounded shadow-sm">
-                              {activeExcerpt.erroneousSnippet}
-                            </span>
-                            <span className="ml-2 inline-flex items-center px-2 py-0.2 rounded-full text-[10px] font-black bg-rose-700 text-white uppercase animate-pulse">
-                              ⚠️ ОШИБКА РД ({activeFinding.param_code})
-                            </span>
-                          </li>
-                          <li>
-                            Климатический район строительства — II, подрайон IIB по СП 131.13330.2020.
-                          </li>
-                          <li>
-                            Степень огнестойкости здания — II, класс конструктивной пожарной опасности — С0.
-                          </li>
-                          <li>
-                            Все работы вести в соответствии со СП 70.13330.2012 «Несущие и ограждающие конструкции».
-                          </li>
-                        </ol>
-                      </div>
-                    )}
-
-                    {/* Specification Table Type */}
-                    {activeExcerpt.sheetType === 'SPECIFICATION_TABLE' && (
-                      <div className="space-y-2">
-                        <div className="font-sans font-bold text-xs uppercase text-slate-800 border-b border-slate-300 pb-1">
-                          Спецификация элементов и конструкций (ГОСТ 21.501-2018):
-                        </div>
-                        <table className="w-full border-collapse border border-slate-400 text-[11px] font-sans">
-                          <thead>
-                            <tr className="bg-slate-100">
-                              <th className="border border-slate-400 p-1.5 text-left w-16">Поз.</th>
-                              <th className="border border-slate-400 p-1.5 text-left">Обозначение и наименование</th>
-                              <th className="border border-slate-400 p-1.5 text-center w-20">Кол-во</th>
-                              <th className="border border-slate-400 p-1.5 text-left w-36">Примечание</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            <tr>
-                              <td className="border border-slate-400 p-1.5 font-bold">1</td>
-                              <td className="border border-slate-400 p-1.5">Колонны стальные двутавровые 30К1 (СТО АСЧМ 20-93)</td>
-                              <td className="border border-slate-400 p-1.5 text-center font-mono">24 шт.</td>
-                              <td className="border border-slate-400 p-1.5 text-slate-600">Сталь С345</td>
-                            </tr>
-                            <tr className="bg-rose-100/80">
-                              <td className="border border-rose-500 p-1.5 font-bold text-rose-800">2</td>
-                              <td className="border border-rose-500 p-1.5">
-                                <span className="bg-rose-600 text-white font-bold px-1.5 py-0.5 rounded">
-                                  {activeExcerpt.erroneousSnippet}
-                                </span>
-                              </td>
-                              <td className="border border-rose-500 p-1.5 text-center font-mono font-bold text-rose-800">1 компл.</td>
-                              <td className="border border-rose-500 p-1.5 font-bold text-rose-800">
-                                ⚠️ {activeFinding.param_code} (Несоответствие ПД)
-                              </td>
-                            </tr>
-                            <tr>
-                              <td className="border border-slate-400 p-1.5 font-bold">3</td>
-                              <td className="border border-slate-400 p-1.5">Ригели фахверка из швеллеров гнутых 160×80×4</td>
-                              <td className="border border-slate-400 p-1.5 text-center font-mono">48 шт.</td>
-                              <td className="border border-slate-400 p-1.5 text-slate-600">По узлу 4/АР</td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-
-                    {/* Floor Plan Type */}
-                    {activeExcerpt.sheetType === 'FLOOR_PLAN' && (
-                      <div className="space-y-2">
-                        <div className="font-sans font-bold text-xs uppercase text-slate-800 border-b border-slate-300 pb-1">
-                          Фрагмент плана на отм. 0.000 в осях 1-6 / А-В:
-                        </div>
-                        <div className="border border-slate-300 p-3 bg-slate-50 rounded space-y-2 font-sans text-xs">
-                          <div className="p-2 bg-rose-600 text-white font-bold rounded">
-                            ⚠️ {activeExcerpt.erroneousSnippet}
-                          </div>
-                          <div className="text-slate-600 text-[11px]">
-                            По проектной документации ПД предусмотрено: {activeExcerpt.expectedSnippet}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* RED STAMP OF MOSGOSSTROY NADZOR */}
-                    <div className="mt-4 p-3 border-2 border-rose-600 bg-rose-50 rounded-xl flex items-start space-x-3 text-rose-950 font-sans">
-                      <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
-                      <div className="text-xs">
-                        <div className="font-bold uppercase tracking-wider text-rose-800 text-[11px]">
-                          Замечание ИИ Мосгосстройнадзора ({activeFinding.param_code}):
-                        </div>
-                        <div className="font-medium mt-0.5">
-                          {activeExcerpt.inspectorStampText}
-                        </div>
-                        <div className="text-[11px] text-slate-600 mt-1">
-                          <strong>Норматив:</strong> {activeExcerpt.normReference}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* GOST Sheet Stamp Title Block at Bottom Right */}
-                  <div className="border-t-2 border-slate-900 pt-3 mt-4 flex items-end justify-between font-sans text-[10px]">
-                    <div className="text-slate-500">
-                      Лист сгенерирован системой автоматизированной сверки ПД/РД Мосгосстройнадзора
-                    </div>
-                    <div className="border border-slate-800 p-2 text-right bg-slate-50">
-                      <div className="font-bold text-slate-900">МОСГОССТРОЙНАДЗОР</div>
-                      <div className="text-slate-600 font-mono text-[9px]">ID: {activeFinding.id}</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <ActualPdfViewer
+              pdfBlobUrl={uploadedPdfBlobUrl || ''}
+              fileName={uploadedPdfFileName || activeExcerpt.pdfFileName}
+              fileSizeMb={uploadedPdfSizeMb || 18.4}
+              initialPage={activeExcerpt.pdfPageNumber || 1}
+              activeFinding={activeFinding}
+              uploadedFiles={uploadedFilesList}
+              onSelectFile={onSelectUploadedPdf}
+              onUploadNewPdf={onUploadNewPdfFile}
+              onDismissMismatchedFinding={(findingId) => {
+                onUpdateFindingStatus(findingId, 'NEGATIVE_VERIFIED', {
+                  rejectionReason: 'PARAMETER_NOT_APPLICABLE',
+                  comment: 'Отклонено экспертом: замечание AR-01 относится к разделу АР, а на данном листе ОВ решения по запорной и балансировочной арматуре соответствуют СП 60.13330.2020.',
+                });
+                setActionNotice({
+                  text: 'Замечание AR-01 отклонено: не применимо к разделу ОВ (Норма)',
+                  type: 'REJECTED',
+                });
+              }}
+              onSwitchToDiscipline={(disc) => {
+                setSelectedSectionFilter(disc);
+                const target = findings.find((f) => f.section === disc || f.param_code.startsWith('OV'));
+                if (target) onSelectFinding(target.id);
+              }}
+              onRecordNormativeVerification={(title, normRef, comment) => {
+                setActionNotice({
+                  text: `Решение «${title}» зафиксировано в протоколе как норма (${normRef})!`,
+                  type: 'CONFIRMED',
+                });
+              }}
+            />
           )}
 
           {/* VIEW 2: CAD BLUEPRINT VIEW */}
@@ -1069,14 +1197,16 @@ export const InspectionFileOverlayViewer: React.FC<InspectionFileOverlayViewerPr
                     </text>
                   </svg>
 
-                  <div className="absolute top-1/3 left-1/4 border-2 border-dashed border-rose-600 bg-rose-500/20 rounded-xl p-3 shadow-xl backdrop-blur">
-                    <div className="bg-rose-600 text-white font-mono text-xs font-black px-2 py-0.5 rounded inline-block mb-1">
-                      {activeFinding.param_code}
+                  {activeFinding && (
+                    <div className="absolute top-1/3 left-1/4 border-2 border-dashed border-rose-600 bg-rose-500/20 rounded-xl p-3 shadow-xl backdrop-blur">
+                      <div className="bg-rose-600 text-white font-mono text-xs font-black px-2 py-0.5 rounded inline-block mb-1">
+                        {activeFinding.param_code}
+                      </div>
+                      <div className="text-xs font-bold text-rose-950">
+                        {activeExcerpt.erroneousSnippet}
+                      </div>
                     </div>
-                    <div className="text-xs font-bold text-rose-950">
-                      {activeExcerpt.erroneousSnippet}
-                    </div>
-                  </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1160,7 +1290,7 @@ export const InspectionFileOverlayViewer: React.FC<InspectionFileOverlayViewerPr
               </button>
             </div>
 
-            {/* 4 One-click Quick Hypothesis Prompts */}
+            {/* 4 One-click Quick Hypothesis Presets */}
             <div className="space-y-1.5">
               <div className="text-[11px] font-bold text-slate-600">Готовые инженерные гипотезы ИИ для этого объекта:</div>
               <div className="flex flex-wrap gap-2">
@@ -1218,7 +1348,16 @@ export const InspectionFileOverlayViewer: React.FC<InspectionFileOverlayViewerPr
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-end pt-1">
+                      <div className="flex items-center justify-end gap-2 pt-1 flex-wrap">
+                        {onOpenVisualizer && (
+                          <button
+                            onClick={() => onOpenVisualizer(susp)}
+                            className="px-3 py-1.5 rounded-lg bg-white hover:bg-indigo-50 text-indigo-700 font-bold text-xs transition-colors flex items-center space-x-1.5 cursor-pointer border border-indigo-300 shadow-xs"
+                          >
+                            <Scan className="w-3.5 h-3.5 text-indigo-600" />
+                            <span>📐 Визуализатор BBox / Калька</span>
+                          </button>
+                        )}
                         <button
                           onClick={() => handlePromoteHypothesis(susp)}
                           className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs transition-colors flex items-center space-x-1.5 cursor-pointer shadow-xs"

@@ -132,54 +132,47 @@ export const CreateObjectModal: React.FC<CreateObjectModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-5 border border-slate-200 my-8 animate-fade-in">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-4 border border-slate-200 my-8 animate-fade-in">
         {/* Modal Header */}
-        <div className="flex items-start justify-between border-b border-slate-100 pb-4">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
           <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-700 to-indigo-700 text-white flex items-center justify-center shadow-md">
+            <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center font-bold">
               <Building2 className="w-5 h-5" />
             </div>
             <div>
-              <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-purple-100 text-purple-800 mb-1">
-                Шаг 1 из 3 • Регистрация объекта
-              </span>
-              <h3 className="text-lg font-black text-slate-900 leading-tight">
-                Создать новый объект государственного надзора
+              <h3 className="text-base font-black text-slate-900 leading-tight">
+                Новый объект государственного надзора
               </h3>
+              <p className="text-xs text-slate-500">
+                Регистрация объекта капитального строительства г. Москвы
+              </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg cursor-pointer"
+            className="w-8 h-8 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 flex items-center justify-center cursor-pointer transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Quick Presets for Inspector convenience */}
-        <div className="bg-purple-50/70 p-3.5 rounded-xl border border-purple-200/70">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-purple-900 flex items-center gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-purple-600" />
-              Быстрое заполнение типового объекта Москвы:
-            </span>
-            <span className="text-[10px] text-purple-600 font-medium">Кликните для автозаполнения</span>
+        {/* Compact Quick Presets for Demo */}
+        <div className="bg-purple-50/70 p-3 rounded-2xl border border-purple-200/60 space-y-1.5">
+          <div className="text-[11px] font-bold text-purple-900 flex items-center gap-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+            <span>Готовые объекты Москвы для быстрого показа:</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
             {SAMPLE_PRESETS.map((p, idx) => (
               <button
                 key={idx}
                 type="button"
                 onClick={() => handleApplyPreset(p)}
-                className="text-left p-2 rounded-lg bg-white hover:bg-purple-100/60 border border-purple-200 text-xs transition-colors cursor-pointer group shadow-2xs"
+                className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-purple-100 border border-purple-200/80 text-xs font-semibold text-slate-800 hover:text-purple-900 transition-all cursor-pointer text-left truncate shadow-2xs"
+                title={`${p.name} (${p.category})`}
               >
-                <div className="font-bold text-slate-800 line-clamp-1 group-hover:text-purple-900">
-                  {p.name.split(',')[0]}
-                </div>
-                <div className="text-[10px] text-slate-500 mt-0.5 line-clamp-1">
-                  {p.category}
-                </div>
+                ⚡ {p.name.split(',')[0]}
               </button>
             ))}
           </div>
@@ -187,17 +180,17 @@ export const CreateObjectModal: React.FC<CreateObjectModalProps> = ({
 
         {/* Error message */}
         {errorMessage && (
-          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-center space-x-2">
+          <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-center space-x-2">
             <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
             <span>{errorMessage}</span>
           </div>
         )}
 
         {/* Form fields */}
-        <form onSubmit={handleCreate} className="space-y-3.5 text-xs">
+        <form onSubmit={handleCreate} className="space-y-3 text-xs">
           <div>
-            <label className="block text-slate-800 font-bold mb-1">
-              Наименование объекта строительства <span className="text-rose-500">*</span>
+            <label className="block text-slate-700 font-bold mb-1">
+              Наименование объекта <span className="text-rose-500">*</span>
             </label>
             <input
               type="text"
@@ -209,43 +202,43 @@ export const CreateObjectModal: React.FC<CreateObjectModalProps> = ({
             />
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             <div>
-              <label className="block text-slate-800 font-bold mb-1 flex items-center gap-1">
-                <MapPin className="w-3.5 h-3.5 text-slate-500" />
-                Адрес объекта в г. Москве <span className="text-rose-500">*</span>
+              <label className="block text-slate-700 font-bold mb-1 flex items-center gap-1">
+                <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                Адрес в г. Москве <span className="text-rose-500">*</span>
               </label>
               <input
                 type="text"
                 required
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
-                placeholder="г. Москва, ЮВАО, ул. Золоторожский Вал, вл. 11"
+                placeholder="г. Москва, ул. Золоторожский Вал, 11"
                 className="w-full p-2.5 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 bg-slate-50/50 text-slate-900 text-xs"
               />
             </div>
 
             <div>
-              <label className="block text-slate-800 font-bold mb-1 flex items-center gap-1">
-                <FileCheck className="w-3.5 h-3.5 text-slate-500" />
-                Номер разрешения на строительство (РНС) <span className="text-rose-500">*</span>
+              <label className="block text-slate-700 font-bold mb-1 flex items-center gap-1">
+                <FileCheck className="w-3.5 h-3.5 text-slate-400" />
+                Номер разрешения (РНС) <span className="text-rose-500">*</span>
               </label>
               <input
                 type="text"
                 required
                 value={permitNumber}
                 onChange={(e) => setPermitNumber(e.target.value)}
-                placeholder="№ 77-04-021840-2026 от 15.01.2026"
+                placeholder="№ 77-04-021840-2026"
                 className="w-full p-2.5 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 bg-slate-50/50 text-slate-900 text-xs font-mono"
               />
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             <div>
-              <label className="block text-slate-800 font-bold mb-1 flex items-center gap-1">
-                <Briefcase className="w-3.5 h-3.5 text-slate-500" />
-                Застройщик / Заказчик
+              <label className="block text-slate-700 font-bold mb-1 flex items-center gap-1">
+                <Briefcase className="w-3.5 h-3.5 text-slate-400" />
+                Заказчик / Застройщик
               </label>
               <input
                 type="text"
@@ -257,8 +250,8 @@ export const CreateObjectModal: React.FC<CreateObjectModalProps> = ({
             </div>
 
             <div>
-              <label className="block text-slate-800 font-bold mb-1 flex items-center gap-1">
-                <Briefcase className="w-3.5 h-3.5 text-slate-500" />
+              <label className="block text-slate-700 font-bold mb-1 flex items-center gap-1">
+                <Briefcase className="w-3.5 h-3.5 text-slate-400" />
                 Генеральный подрядчик
               </label>
               <input
@@ -271,36 +264,20 @@ export const CreateObjectModal: React.FC<CreateObjectModalProps> = ({
             </div>
           </div>
 
-          <div>
-            <label className="block text-slate-800 font-bold mb-1 flex items-center gap-1">
-              <Layers className="w-3.5 h-3.5 text-slate-500" />
-              Сценарий проверки документации (ТЗ Раздел 9.1):
-            </label>
-            <select
-              value={uploadScenario}
-              onChange={(e) => setUploadScenario(e.target.value as UploadScenario)}
-              className="w-full p-2.5 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 bg-slate-50 text-slate-900 text-xs font-medium cursor-pointer"
-            >
-              <option value="PD_RD_ONLY">ПД + РД (Сверка проектной и рабочей документации — основной режим)</option>
-              <option value="FULL">FULL (ПД + РД + ИД — с учетом исполнительных схем и геодезии)</option>
-              <option value="PARTIALLY_LOADED">Инкрементальная проверка (поэтапная дозагрузка комплекта)</option>
-            </select>
-          </div>
-
           {/* Dialog Action Buttons */}
-          <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
+          <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+              className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
             >
               Отмена
             </button>
             <button
               type="submit"
-              className="px-5 py-2.5 text-xs font-bold text-white bg-gradient-to-r from-purple-700 via-purple-800 to-indigo-700 hover:from-purple-800 hover:to-indigo-800 rounded-xl shadow-md transition-all flex items-center space-x-2 cursor-pointer"
+              className="px-5 py-2.5 text-xs font-bold text-white bg-purple-700 hover:bg-purple-800 rounded-xl shadow-xs transition-all flex items-center space-x-1.5 cursor-pointer"
             >
-              <span>Создать объект и загрузить документы</span>
+              <span>Создать и перейти к загрузке</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </div>

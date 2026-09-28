@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Navbar } from './components/Navbar';
 import { Dashboard } from './components/Dashboard';
 import { InspectionWorkspace } from './components/InspectionWorkspace';
@@ -9,16 +9,23 @@ import { MLRetrainingTab } from './components/MLRetrainingTab';
 import { MLRepositoryTab } from './components/MLRepositoryTab';
 import { NormativeBaseTab } from './components/NormativeBaseTab';
 import { AuditLogTab } from './components/AuditLogTab';
+import { ExecutiveDocumentationRegistry } from './components/ExecutiveDocumentationRegistry';
+import { DrawingParserTab } from './components/DrawingParserTab';
 import { UploadModal } from './components/UploadModal';
 import { ExportModal } from './components/ExportModal';
 import { CreateObjectModal } from './components/CreateObjectModal';
+import { AuthModal } from './components/AuthModal';
+import { UploadedPdfMetadata } from './components/ActualPdfViewer';
+import { classifyFileObject, classifyDocument } from './utils/documentClassifier';
 
 import {
   initialObjects,
   initialProtocol,
   initialAuditLogs,
   initialSuspicions,
+  COMPREHENSIVE_SUSPICIONS_CATALOG,
 } from './data/mockData';
+import { ROLE_PROFILES } from './data/rolesData';
 
 import {
   UserRole,
@@ -30,24 +37,71 @@ import {
   Suspicion,
   CheckFinding,
   EvidenceFragment,
+  SectionCode,
 } from './types';
 
 import { CheckCircle2, Eye, ArrowRight, X, UploadCloud } from 'lucide-react';
+
+const defaultEmptyObject: ConstructionObject = {
+  id: 'empty-obj',
+  name: 'Объект не выбран',
+  address: 'Создайте объект или загрузите документацию (ПД / РД / ИД)',
+  customer: 'Не указан',
+  contractor: 'Не указан',
+  permit_number: 'Не указан',
+  status: 'GREEN',
+  active_protocol_id: 'prot-empty',
+  created_at: new Date().toISOString(),
+  scenarios: {
+    upload_scenario: 'FULL',
+    stage_statuses: {
+      pd: 'PD_MISSING',
+      rd: 'RD_MISSING',
+      id: 'ID_MISSING',
+    },
+  },
+  stats: {
+    total_params_checked: 0,
+    confirmed_violations: 0,
+    candidate_findings: 0,
+    negative_verified: 0,
+    clarification_required: 0,
+    missing_evidence: 0,
+    suspicions_count: 0,
+  },
+  iais_rin_sync: {
+    process_id: '',
+    ukep_signature: {
+      signatory: '',
+      certificate_serial: '',
+      valid_until: '',
+      valid: false,
+    },
+    status: 'PENDING',
+  },
+};
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [currentRole, setCurrentRole] = useState<UserRole>('INSPECTOR');
   const [objects, setObjects] = useState<ConstructionObject[]>(initialObjects);
-  const [selectedObjectId, setSelectedObjectId] = useState<string>(initialObjects[0].id);
+  const [selectedObjectId, setSelectedObjectId] = useState<string>(initialObjects[0]?.id || '');
   const [protocol, setProtocol] = useState<InspectionProtocol>(initialProtocol);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(initialAuditLogs);
   const [suspicions, setSuspicions] = useState<Suspicion[]>(initialSuspicions);
 
   // Modals state
+  const [isAuthOpen, setIsAuthOpen] = useState<boolean>(false);
   const [isCreateObjectOpen, setIsCreateObjectOpen] = useState<boolean>(false);
   const [isUploadOpen, setIsUploadOpen] = useState<boolean>(false);
   const [isExportOpen, setIsExportOpen] = useState<boolean>(false);
   const [isIncrementalUpload, setIsIncrementalUpload] = useState<boolean>(false);
+
+  // Actual uploaded PDF files state for authentic inspection viewer
+  const [uploadedPdfs, setUploadedPdfs] = useState<UploadedPdfMetadata[]>([]);
+  const [activePdfBlobUrl, setActivePdfBlobUrl] = useState<string>('');
+  const [activePdfName, setActivePdfName] = useState<string>('');
+  const [activePdfSizeMb, setActivePdfSizeMb] = useState<number>(0);
 
   // Workflow progress banner state (1. Create -> 2. Upload -> 3. Inspect)
   const [workflowNotice, setWorkflowNotice] = useState<{
@@ -57,7 +111,8 @@ export const App: React.FC = () => {
     objectName: string;
   } | null>(null);
 
-  const currentObject = objects.find((o) => o.id === selectedObjectId) || objects[0];
+  const currentObject =
+    objects.find((o) => o.id === selectedObjectId) || objects[0] || defaultEmptyObject;
 
   // Helper to add audit log entry
   const addAuditEntry = (action: string, details: string) => {
@@ -83,6 +138,270 @@ export const App: React.FC = () => {
     };
 
     setAuditLogs((prev) => [newLog, ...prev]);
+  };
+
+  const handleUploadNewPdfFile = async (file: File, explicitStage?: 'PD' | 'RD' | 'ID') => {
+    const classification = await classifyFileObject(file);
+    const assignedStage = explicitStage || classification.stage;
+    const blobUrl = URL.createObjectURL(file);
+    const sizeMb = +(file.size / (1024 * 1024)).toFixed(1);
+
+    const newPdfItem: UploadedPdfMetadata = {
+      id: `pdf-uploaded-${Date.now()}`,
+      name: file.name,
+      blobUrl: blobUrl,
+      sizeMb: sizeMb || 1.0,
+      stage: assignedStage,
+      uploadedAt: 'Только что',
+    };
+
+    setUploadedPdfs((prev) => [newPdfItem, ...prev]);
+    setActivePdfBlobUrl(blobUrl);
+    setActivePdfName(file.name);
+    setActivePdfSizeMb(sizeMb || 1.0);
+
+    // If no object exists yet, automatically create an object for this file
+    if (objects.length === 0 || !objects.some((o) => o.id === selectedObjectId)) {
+      const autoObjName =
+        classification.suggestedObjectName ||
+        file.name.replace(/\.[^/.]+$/, '').replace(/[_\\-]/g, ' ');
+
+      const newObj: ConstructionObject = {
+        id: `obj-${Date.now()}`,
+        name: autoObjName,
+        address: 'г. Москва (адрес уточняется по проектным данным)',
+        customer: 'Заказчик строительства',
+        contractor: 'Генеральная подрядная организация',
+        permit_number: 'РНС уточняется',
+        status: 'GREEN',
+        active_protocol_id: `prot-${Date.now()}`,
+        created_at: new Date().toISOString(),
+        scenarios: {
+          upload_scenario: assignedStage === 'PD' ? 'FULL' : 'PD_RD_ONLY',
+          stage_statuses: {
+            pd: assignedStage === 'PD' ? 'PD_UPLOADED' : 'PD_MISSING',
+            rd: assignedStage === 'RD' ? 'RD_UPLOADED' : 'RD_MISSING',
+            id: assignedStage === 'ID' ? 'ID_UPLOADED' : 'ID_MISSING',
+          },
+        },
+        stats: {
+          total_params_checked: 0,
+          confirmed_violations: 0,
+          candidate_findings: 0,
+          negative_verified: 0,
+          clarification_required: 0,
+          missing_evidence: 0,
+          suspicions_count: COMPREHENSIVE_SUSPICIONS_CATALOG.length,
+        },
+        iais_rin_sync: {
+          process_id: `proc-${Date.now()}`,
+          ukep_signature: {
+            signatory: 'Иванов А.С., Инспектор Мосгосстройнадзора',
+            certificate_serial: '00E17A8293DF4B1C90',
+            valid_until: '31.12.2026',
+            valid: true,
+          },
+          status: 'PENDING',
+        },
+      };
+      setObjects([newObj]);
+      setSelectedObjectId(newObj.id);
+    } else {
+      setObjects((prev) =>
+        prev.map((obj) => {
+          if (obj.id !== selectedObjectId) return obj;
+          const currentStageStatuses = { ...obj.scenarios.stage_statuses };
+          if (assignedStage === 'PD') currentStageStatuses.pd = 'PD_UPLOADED';
+          if (assignedStage === 'RD') currentStageStatuses.rd = 'RD_UPLOADED';
+          if (assignedStage === 'ID') currentStageStatuses.id = 'ID_UPLOADED';
+          return {
+            ...obj,
+            scenarios: {
+              ...obj.scenarios,
+              stage_statuses: currentStageStatuses,
+            },
+            stats: {
+              ...obj.stats,
+              suspicions_count: COMPREHENSIVE_SUSPICIONS_CATALOG.length,
+            },
+          };
+        })
+      );
+    }
+
+    if (suspicions.length === 0) {
+      setSuspicions(COMPREHENSIVE_SUSPICIONS_CATALOG);
+    }
+
+    addAuditEntry(
+      'DOCUMENT_CLASSIFIED_AUTO',
+      `Файл «${file.name}» определен как ${classification.stageName} (точность ${Math.round(classification.confidence * 100)}%). ${classification.primaryReason}`
+    );
+
+    setWorkflowNotice({
+      step: 2,
+      title: `Документ загружен: ${classification.stageName}`,
+      message: `Файл «${file.name}» определен как стадия «${assignedStage}» (${classification.gostStandardRef}). ${
+        assignedStage === 'PD'
+          ? 'Назначен эталоном проекта! Замечаний в эталоне нет.'
+          : 'Документ загружен и готов к верификации с эталоном.'
+      }`,
+      objectName: file.name,
+    });
+
+    // Immediately switch to the second section (Верификация протокола)
+    setActiveTab('inspection');
+  };
+
+  const handleQuickAddStage = (stage: 'PD' | 'RD' | 'ID') => {
+    const stageNames: Record<'PD' | 'RD' | 'ID', { code: string; title: string; sample: string }> = {
+      PD: { code: 'ПД', title: 'Проектная документация (Эталон)', sample: 'ПД-2026-АР_Эталон_проекта_Мосгосэкспертиза.pdf' },
+      RD: { code: 'РД', title: 'Рабочая документация (В производство)', sample: 'РД-2026-04.266-АР1_Рабочие_чертежи_в_производство.pdf' },
+      ID: { code: 'ИД', title: 'Исполнительная документация (АОСР и геодезия)', sample: 'ИД-2026-АОСР-01_Акты_скрытых_работ_и_геодезия.pdf' },
+    };
+
+    const info = stageNames[stage];
+
+    setObjects((prev) =>
+      prev.map((obj) => {
+        if (obj.id !== selectedObjectId) return obj;
+        const currentStageStatuses = { ...obj.scenarios.stage_statuses };
+        if (stage === 'PD') currentStageStatuses.pd = 'PD_UPLOADED';
+        if (stage === 'RD') currentStageStatuses.rd = 'RD_UPLOADED';
+        if (stage === 'ID') currentStageStatuses.id = 'ID_UPLOADED';
+        return {
+          ...obj,
+          scenarios: {
+            ...obj.scenarios,
+            stage_statuses: currentStageStatuses,
+          },
+          stats: {
+            ...obj.stats,
+            suspicions_count: COMPREHENSIVE_SUSPICIONS_CATALOG.length,
+          },
+        };
+      })
+    );
+
+    setUploadedPdfs((prev) => {
+      if (prev.some((p) => p.stage === stage)) return prev;
+      return [
+        {
+          id: `sample-${stage.toLowerCase()}-${Date.now()}`,
+          name: info.sample,
+          blobUrl: '',
+          sizeMb: 5.4,
+          stage: stage,
+          uploadedAt: 'Только что',
+        },
+        ...prev,
+      ];
+    });
+
+    if (suspicions.length === 0) {
+      setSuspicions(COMPREHENSIVE_SUSPICIONS_CATALOG);
+    }
+
+    addAuditEntry(
+      'STAGE_DOCUMENT_ADDED',
+      `К объекту добавлена документация стадии «${info.code}» (${info.title}).`
+    );
+  };
+
+  const handleQuickCompleteAllStages = () => {
+    setObjects((prev) =>
+      prev.map((obj) => {
+        if (obj.id !== selectedObjectId) return obj;
+        return {
+          ...obj,
+          scenarios: {
+            ...obj.scenarios,
+            stage_statuses: {
+              pd: 'PD_UPLOADED',
+              rd: 'RD_UPLOADED',
+              id: 'ID_UPLOADED',
+            },
+          },
+          stats: {
+            ...obj.stats,
+            total_params_checked: 132,
+            suspicions_count: COMPREHENSIVE_SUSPICIONS_CATALOG.length,
+          },
+        };
+      })
+    );
+
+    setUploadedPdfs((prev) => {
+      const hasPd = prev.some((p) => p.stage === 'PD');
+      const hasRd = prev.some((p) => p.stage === 'RD');
+      const hasId = prev.some((p) => p.stage === 'ID');
+      const newItems = [...prev];
+      if (!hasPd) {
+        newItems.push({
+          id: `demo-pd-${Date.now()}`,
+          name: 'ПД-2026-АР_Эталон_проекта_Мосгосэкспертиза.pdf',
+          blobUrl: '',
+          sizeMb: 8.4,
+          stage: 'PD',
+          uploadedAt: 'Только что',
+        });
+      }
+      if (!hasRd) {
+        newItems.push({
+          id: `demo-rd-${Date.now()}`,
+          name: 'РД-2026-04.266-АР1_Рабочие_чертежи_в_производство.pdf',
+          blobUrl: '',
+          sizeMb: 12.1,
+          stage: 'RD',
+          uploadedAt: 'Только что',
+        });
+      }
+      if (!hasId) {
+        newItems.push({
+          id: `demo-id-${Date.now()}`,
+          name: 'ИД-2026-АОСР-01_Акты_скрытых_работ_и_геодезия.pdf',
+          blobUrl: '',
+          sizeMb: 6.2,
+          stage: 'ID',
+          uploadedAt: 'Только что',
+        });
+      }
+      return newItems;
+    });
+
+    if (suspicions.length === 0) {
+      setSuspicions(COMPREHENSIVE_SUSPICIONS_CATALOG);
+    }
+
+    addAuditEntry(
+      'PACKAGE_COMPLETED',
+      'Загружен полный комплект строительной документации этапа: ПД (проект), РД (рабочая) и ИД (исполнительная).'
+    );
+  };
+
+  const handleSelectUploadedPdf = (fileId: string) => {
+    const found = uploadedPdfs.find((f) => f.id === fileId);
+    if (found) {
+      setActivePdfBlobUrl(found.blobUrl);
+      setActivePdfName(found.name);
+      setActivePdfSizeMb(found.sizeMb);
+    }
+  };
+
+  const handleDeleteUploadedPdf = (fileId: string) => {
+    setUploadedPdfs((prev) => {
+      const filtered = prev.filter((f) => f.id !== fileId);
+      if (filtered.length > 0) {
+        setActivePdfBlobUrl(filtered[0].blobUrl);
+        setActivePdfName(filtered[0].name);
+        setActivePdfSizeMb(filtered[0].sizeMb);
+      } else {
+        setActivePdfBlobUrl('');
+        setActivePdfName('');
+        setActivePdfSizeMb(0);
+      }
+      return filtered;
+    });
   };
 
   // 1. Step 1: Create Construction Object
@@ -402,45 +721,173 @@ export const App: React.FC = () => {
   };
 
   // 7. Step 2 & 3: Upload success and automatic verification
-  const handleUploadSuccess = (filesCount: number) => {
-    setObjects((prev) =>
-      prev.map((obj) => {
-        if (obj.id === selectedObjectId) {
-          return {
-            ...obj,
-            status: 'RED',
-            scenarios: {
-              ...obj.scenarios,
-              stage_statuses: {
-                pd: 'PD_UPLOADED',
-                rd: 'RD_UPLOADED',
-                id: obj.scenarios.stage_statuses.id === 'ID_MISSING' ? 'ID_PARTIAL' : obj.scenarios.stage_statuses.id,
-              },
-            },
-            stats: {
-              ...obj.stats,
-              total_params_checked: 132,
-              confirmed_violations: Math.max(obj.stats.confirmed_violations, 5),
-              candidate_findings: Math.max(obj.stats.candidate_findings, 3),
-              negative_verified: Math.max(obj.stats.negative_verified, 14),
-            },
-          };
+  const handleUploadSuccess = (
+    filesCount: number,
+    uploadedFiles?: Array<{
+      id: string;
+      name: string;
+      sizeMb: number;
+      format: string;
+      stage: any;
+      fileObject?: File;
+      blobUrl?: string;
+    }>
+  ) => {
+    if (uploadedFiles && uploadedFiles.length > 0) {
+      const pdfFiles = uploadedFiles.filter(
+        (f) =>
+          f.name.toLowerCase().endsWith('.pdf') ||
+          f.format === 'PDF' ||
+          (f.fileObject && f.fileObject.type === 'application/pdf')
+      );
+
+      if (pdfFiles.length > 0) {
+        const newPdfItems: UploadedPdfMetadata[] = pdfFiles.map((pf) => ({
+          id: pf.id,
+          name: pf.name,
+          blobUrl: pf.blobUrl || (pf.fileObject ? URL.createObjectURL(pf.fileObject) : ''),
+          sizeMb: pf.sizeMb,
+          stage: pf.stage as any,
+          uploadedAt: 'Только что',
+        }));
+
+        setUploadedPdfs((prev) => [...newPdfItems, ...prev]);
+
+        if (newPdfItems[0]?.blobUrl) {
+          setActivePdfBlobUrl(newPdfItems[0].blobUrl);
+          setActivePdfName(newPdfItems[0].name);
+          setActivePdfSizeMb(newPdfItems[0].sizeMb);
         }
-        return obj;
-      })
-    );
+      }
+    }
+
+    const hasPd = uploadedFiles?.some((f) => f.stage === 'PD');
+    const hasRd = uploadedFiles?.some((f) => f.stage === 'RD');
+    const hasId = uploadedFiles?.some((f) => f.stage === 'ID');
+
+    // Only report violations if protocol actually contains findings
+    const actualViolationsCount = protocol.findings.filter(
+      (f) => f.finding_status === 'CONFIRMED_VIOLATION'
+    ).length;
+    const actualCandidatesCount = protocol.findings.filter(
+      (f) => f.finding_status === 'CANDIDATE'
+    ).length;
+    const objectStatus = actualViolationsCount > 0 ? 'RED' : 'GREEN';
+
+    // If no object exists yet, automatically create one
+    if (objects.length === 0 || !objects.some((o) => o.id === selectedObjectId)) {
+      const primaryFile = uploadedFiles?.[0];
+      const detectedName = primaryFile?.name
+        ? primaryFile.name.replace(/\.[^/.]+$/, '').replace(/[_\\-]/g, ' ')
+        : 'Новый объект строительства';
+
+      const newObj: ConstructionObject = {
+        id: `obj-${Date.now()}`,
+        name: detectedName,
+        address: 'г. Москва (адрес по ГПЗУ)',
+        customer: 'Заказчик строительства',
+        contractor: 'Генеральная подрядная организация',
+        permit_number: 'РНС-77-2026',
+        status: objectStatus,
+        active_protocol_id: protocol.id,
+        created_at: new Date().toISOString(),
+        scenarios: {
+          upload_scenario: hasPd && (hasRd || hasId) ? 'FULL' : 'PD_RD_ONLY',
+          stage_statuses: {
+            pd: hasPd ? 'PD_UPLOADED' : 'PD_MISSING',
+            rd: hasRd ? 'RD_UPLOADED' : 'RD_MISSING',
+            id: hasId ? 'ID_UPLOADED' : 'ID_MISSING',
+          },
+        },
+        stats: {
+          total_params_checked: hasPd && hasRd ? 132 : 48,
+          confirmed_violations: actualViolationsCount,
+          candidate_findings: actualCandidatesCount,
+          negative_verified: 0,
+          clarification_required: 0,
+          missing_evidence: 0,
+          suspicions_count: 0,
+        },
+        iais_rin_sync: {
+          process_id: `proc-${Date.now()}`,
+          ukep_signature: {
+            signatory: 'Иванов А.С., Инспектор Мосгосстройнадзора',
+            certificate_serial: '00E17A8293DF4B1C90',
+            valid_until: '31.12.2026',
+            valid: true,
+          },
+          status: 'PENDING',
+        },
+      };
+
+      setObjects([newObj]);
+      setSelectedObjectId(newObj.id);
+    } else {
+      setObjects((prev) =>
+        prev.map((obj) => {
+          if (obj.id === selectedObjectId) {
+            return {
+              ...obj,
+              status: objectStatus,
+              scenarios: {
+                ...obj.scenarios,
+                stage_statuses: {
+                  pd: hasPd ? 'PD_UPLOADED' : obj.scenarios.stage_statuses.pd,
+                  rd: hasRd ? 'RD_UPLOADED' : obj.scenarios.stage_statuses.rd,
+                  id: hasId ? 'ID_UPLOADED' : obj.scenarios.stage_statuses.id,
+                },
+              },
+              stats: {
+                ...obj.stats,
+                total_params_checked: hasPd && hasRd ? 132 : obj.stats.total_params_checked || 48,
+                confirmed_violations: actualViolationsCount,
+                candidate_findings: actualCandidatesCount,
+              },
+            };
+          }
+          return obj;
+        })
+      );
+    }
+
+    const currentObjName =
+      objects.find((o) => o.id === selectedObjectId)?.name ||
+      uploadedFiles?.[0]?.name ||
+      'Объект';
 
     addAuditEntry(
       'OBJECT_CHECK_EXECUTED',
-      `Для объекта «${currentObject.name}» загружено ${filesCount} файлов. Выполнена сверка 132 параметров нормативной базы 2026 года. Расхождения подсвечены КРАСНЫМ цветом.`
+      `Для объекта «${currentObjName}» загружено ${filesCount} файлов. Автоматически распознаны стадии документации: ${
+        hasPd ? 'ПД (Эталон) ' : ''
+      }${hasRd ? 'РД (Рабочая) ' : ''}${hasId ? 'ИД (Исполнительная)' : ''}. Замечаний: ${actualViolationsCount}.`
     );
 
-    setWorkflowNotice({
-      step: 3,
-      title: 'Шаг 3: Проверка объекта успешно проведена!',
-      message: `Комплекты ПД и РД сверены по 132 контрольным точкам. Обнаружено 5 расхождений, которые выделены КРАСНЫМ цветом в режиме визуального сравнения.`,
-      objectName: currentObject.name,
-    });
+    if (hasPd && !hasRd && !hasId) {
+      setWorkflowNotice({
+        step: 2,
+        title: 'Эталонный комплект (ПД) успешно загружен',
+        message: 'Стадия П утверждена экспертизой. Нарушений в эталоне нет (0 замечаний). Теперь вы можете загрузить комплект РД для автоматической сверки.',
+        objectName: currentObjName,
+      });
+    } else if (actualViolationsCount === 0) {
+      setWorkflowNotice({
+        step: 3,
+        title: 'Проверка завершена: нарушений не обнаружено',
+        message: 'Все параметры и контрольные точки проверены. Замечаний и несоответствий нормам 2026 года нет (0 ошибок).',
+        objectName: currentObjName,
+      });
+    } else {
+      setWorkflowNotice({
+        step: 3,
+        title: `Обнаружено ${actualViolationsCount} замечаний`,
+        message: 'Обнаруженные отклонения зафиксированы в протоколе и выделены в режиме визуализатора.',
+        objectName: currentObjName,
+      });
+    }
+
+    // Immediately navigate to the 2nd section (Верификация протокола) and close upload modal
+    setActiveTab('inspection');
+    setIsUploadOpen(false);
   };
 
   // 8. Promote suspicion from Free Hypothesis to Candidate
@@ -456,34 +903,53 @@ export const App: React.FC = () => {
       )
     );
 
+    const disc = susp.discipline || 'АР';
+    const tzCode = susp.tz_requirement_code || `ТЗ-9.5.${susp.suspicion_id}`;
+    
+    // Map discipline (АР, КР, ОВ, ВК, ЭОМ, СПЗ, ПЗУ, ТХ) to SectionCode
+    const sectionMapping: Record<string, SectionCode> = {
+      'АР': 'АР',
+      'КР': 'КР',
+      'КМ': 'КР',
+      'КЖ': 'КР',
+      'ОВ': 'ИОС1',
+      'ВК': 'ИОС2',
+      'ЭОМ': 'ИОС3',
+      'СПЗ': 'ППМ',
+      'ПЗУ': 'СПЗУ',
+      'ТХ': 'ТХ',
+      'ПЗ': 'ПЗ',
+    };
+    const validSection: SectionCode = sectionMapping[disc] || 'АР';
+
     const newFinding: CheckFinding = {
       id: `f-hypo-${susp.suspicion_id}`,
       param_id: susp.suspicion_id,
       object_id: currentObject.id,
       completeness_status: 'COMPLETE',
-      param_code: `HYPO-${susp.suspicion_id}`,
-      section: 'АР',
-      param_name: susp.description.substring(0, 48) + '...',
+      param_code: tzCode,
+      section: validSection,
+      param_name: susp.description.substring(0, 56) + (susp.description.length > 56 ? '...' : ''),
       finding_status: 'CANDIDATE',
       review_priority: susp.review_priority,
       expected_value: susp.pd_reference,
       actual_value: susp.rd_reference,
-      delta: 'Выявлено свободным поиском (SUSPICION)',
+      delta: 'Выявлено анализом гипотез ИИ (Раздел 9.5 ТЗ)',
       justification: susp.description,
       normative_reference: susp.normative_base,
       evidence_fragments: [
         {
           id: `ev-hypo-${susp.suspicion_id}`,
           file_id: 'file-hypo',
-          file_name: 'Гипотеза свободного поиска',
+          file_name: `Гипотеза ИИ [${disc}] ${tzCode}`,
           file_hash: 'sha256-hypo',
           stage: 'RD',
-          discipline: 'АР',
-          document_code: 'HYPO',
+          discipline: disc,
+          document_code: tzCode,
           revision: 'Изм. 4',
           approval_status: 'APPROVED',
           approval_date: '2026-07-08',
-          sheet_page: 'Лист 14',
+          sheet_page: susp.rd_reference.split(',')[0] || 'Лист 14',
           bbox: { x: 0.1, y: 0.2, width: 0.3, height: 0.3, page: 1 },
           extracted_value: susp.rd_reference,
           role: 'ACTUAL',
@@ -564,18 +1030,38 @@ export const App: React.FC = () => {
     );
   };
 
-  // 11. Role switcher
+  // 11. Role switcher & Registration handler
   const handleSetCurrentRole = (role: UserRole) => {
     setCurrentRole(role);
-    const roleNames: Record<UserRole, string> = {
-      INSPECTOR: 'Иванов А.С. (Инспектор)',
-      SUPERVISOR: 'Смирнов В.П. (Супервизор)',
-      ML_ENGINEER: 'Ковалева Е.М. (ML-инженер)',
-      ADMIN: 'Соколов Д.Н. (Администратор)',
-    };
+    const profile = ROLE_PROFILES[role];
     addAuditEntry(
       'ROLE_SWITCH',
-      `Смена активного профиля пользователя на: ${roleNames[role]} (УКЭП и права доступа обновлены).`
+      `Вход в систему: ${profile.fullName} (${profile.title}). Сертификат УКЭП: ${profile.certificateSerial}.`
+    );
+  };
+
+  const handleRegisterCustomUser = (userData: {
+    fullName: string;
+    role: UserRole;
+    department: string;
+    certificateNumber: string;
+  }) => {
+    const targetRole = userData.role;
+    ROLE_PROFILES[targetRole].fullName = userData.fullName;
+    const parts = userData.fullName.split(' ');
+    if (parts.length >= 2) {
+      ROLE_PROFILES[targetRole].shortName = `${parts[0]} ${parts[1][0]}.${parts[2] ? ` ${parts[2][0]}.` : ''}`;
+    } else {
+      ROLE_PROFILES[targetRole].shortName = userData.fullName;
+    }
+    ROLE_PROFILES[targetRole].department = userData.department;
+    ROLE_PROFILES[targetRole].certificateSerial = userData.certificateNumber;
+
+    setCurrentRole(targetRole);
+
+    addAuditEntry(
+      'USER_REGISTERED',
+      `Зарегистрирован новый сотрудник в реестре надзора: ${userData.fullName} (Роль: ${ROLE_PROFILES[targetRole].badge}, Департамент: ${userData.department}). Выпущен сертификат ГОСТ: ${userData.certificateNumber}.`
     );
   };
 
@@ -593,6 +1079,7 @@ export const App: React.FC = () => {
           setIsUploadOpen(true);
         }}
         onOpenCreateObject={() => setIsCreateObjectOpen(true)}
+        onOpenAuth={() => setIsAuthOpen(true)}
       />
 
       {/* Sequential Workflow Banner when active */}
@@ -615,17 +1102,6 @@ export const App: React.FC = () => {
             </div>
 
             <div className="flex items-center space-x-2">
-              {workflowNotice.step === 3 && (
-                <button
-                  onClick={() => setActiveTab('inspection')}
-                  className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg shadow transition-all flex items-center space-x-1.5 cursor-pointer"
-                >
-                  <Eye className="w-3.5 h-3.5" />
-                  <span>Верификация: чертеж с подсветкой ошибок</span>
-                  <ArrowRight className="w-3 h-3 ml-1" />
-                </button>
-              )}
-
               {workflowNotice.step === 2 && (
                 <button
                   onClick={() => setIsUploadOpen(true)}
@@ -674,10 +1150,12 @@ export const App: React.FC = () => {
               setIsUploadOpen(true);
             }}
             onToggleVerifiedAndSent={handleToggleVerifiedAndSent}
+            currentRole={currentRole}
+            onOpenAuth={() => setIsAuthOpen(true)}
           />
         )}
 
-        {(activeTab === 'inspection' || activeTab === 'hypotheses') && (
+        {activeTab === 'inspection' && (
           <InspectionWorkspace
             currentObject={currentObject}
             protocol={protocol}
@@ -698,7 +1176,70 @@ export const App: React.FC = () => {
             onOpenExport={() => setIsExportOpen(true)}
             onSendReportAndComplete={handleSendReportAndHighlightObject}
             onNavigateToDashboard={() => setActiveTab('dashboard')}
+            uploadedPdfBlobUrl={activePdfBlobUrl}
+            uploadedPdfFileName={activePdfName}
+            uploadedPdfSizeMb={activePdfSizeMb}
+            uploadedFilesList={uploadedPdfs}
+            onSelectUploadedPdf={handleSelectUploadedPdf}
+            onDeleteUploadedPdf={handleDeleteUploadedPdf}
+            onUploadNewPdfFile={handleUploadNewPdfFile}
+            onQuickCompletePackage={handleQuickCompleteAllStages}
+            onQuickAddStage={handleQuickAddStage}
+            onNavigateToTab={(tab) => setActiveTab(tab)}
           />
+        )}
+
+        {activeTab === 'parsing' && (
+          <div className="space-y-4">
+            <DrawingParserTab
+              uploadedFiles={uploadedPdfs}
+              findings={protocol.findings}
+              activeFinding={protocol.findings[0]}
+              onNavigateToVerification={() => setActiveTab('inspection')}
+            />
+          </div>
+        )}
+
+        {activeTab === 'hypotheses' && (
+          <div className="space-y-4">
+            <HypothesisTab
+              suspicions={suspicions}
+              onPromoteToCandidate={handlePromoteToCandidate}
+              onDismissSuspicion={handleDismissSuspicion}
+              onAddNewHypothesis={handleAddNewHypothesis}
+            />
+          </div>
+        )}
+
+        {activeTab === 'executive_docs' && (
+          <div className="space-y-4">
+            <ExecutiveDocumentationRegistry
+              files={uploadedPdfs}
+              onSelectDocument={(doc) => {
+                const matched = uploadedPdfs.find(
+                  (f) => f.name === doc.name || (doc.blobUrl && f.blobUrl === doc.blobUrl)
+                );
+                if (matched) {
+                  handleSelectUploadedPdf(matched.id);
+                  setActiveTab('inspection');
+                } else {
+                  setActiveTab('inspection');
+                }
+              }}
+              onUploadExecutiveDoc={() => {
+                setIsIncrementalUpload(false);
+                setIsUploadOpen(true);
+              }}
+              onDeleteDocument={(docId, docName) => {
+                const matched = uploadedPdfs.find(
+                  (f) => f.id === docId || f.name === docName
+                );
+                if (matched) {
+                  handleDeleteUploadedPdf(matched.id);
+                }
+              }}
+            />
+          </div>
         )}
 
         {activeTab === 'matrix' && <Matrix132Tab />}
@@ -707,6 +1248,29 @@ export const App: React.FC = () => {
           <IaisRinTab
             currentObject={currentObject}
             protocol={protocol}
+            onUpdateSyncStatus={(status) => {
+              setObjects((prev) =>
+                prev.map((obj) =>
+                  obj.id === currentObject.id
+                    ? {
+                        ...obj,
+                        iais_rin_sync: {
+                          ...obj.iais_rin_sync,
+                          status,
+                        },
+                      }
+                    : obj
+                )
+              );
+              setProtocol((prev) => ({
+                ...prev,
+                iais_sync_status: status as any,
+              }));
+              addAuditEntry(
+                'IAIS_RIN_SYNC_STATUS',
+                `Статус шлюза ИАИС «РиН» изменен на: ${status} (Процесс: ${currentObject.iais_rin_sync.process_id}).`
+              );
+            }}
           />
         )}
 
@@ -714,7 +1278,7 @@ export const App: React.FC = () => {
           <MLRepositoryTab currentRole={currentRole} />
         )}
 
-        {activeTab === 'ml_gold' && (
+        {(activeTab === 'ml_gold' || activeTab === 'ml_retrain') && (
           <MLRetrainingTab currentRole={currentRole} />
         )}
 
@@ -756,6 +1320,15 @@ export const App: React.FC = () => {
         onClose={() => setIsExportOpen(false)}
         object={currentObject}
         protocol={protocol}
+      />
+
+      {/* 4. Unified Auth & Role Selection Modal */}
+      <AuthModal
+        isOpen={isAuthOpen}
+        onClose={() => setIsAuthOpen(false)}
+        currentRole={currentRole}
+        onSelectRole={(role) => handleSetCurrentRole(role)}
+        onRegisterCustomUser={handleRegisterCustomUser}
       />
 
       {/* Footer */}
