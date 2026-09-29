@@ -220,6 +220,25 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           </div>
         </div>
 
+        {/* Direct link for Full Word Project Documentation */}
+        <div className="p-3 bg-blue-50/70 rounded-xl border border-blue-200 flex items-center justify-between text-xs">
+          <div className="flex items-center space-x-2">
+            <span className="text-base">📘</span>
+            <div>
+              <div className="font-bold text-blue-950">Техническая документация проекта (Word)</div>
+              <div className="text-[11px] text-blue-700">Полное руководство и описание архитектуры для жюри ЛЦТ 2026</div>
+            </div>
+          </div>
+          <a
+            href="/documentation.docx"
+            download="Документация_Инспектор_ИИ_Мосгосстройнадзор.docx"
+            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-sm flex items-center gap-1 cursor-pointer transition-all text-[11px] shrink-0"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Скачать .docx</span>
+          </a>
+        </div>
+
         {downloadSuccess && (
           <div className="p-3 bg-emerald-50 text-emerald-800 rounded-xl border border-emerald-300 text-xs font-semibold flex items-center space-x-2">
             <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
